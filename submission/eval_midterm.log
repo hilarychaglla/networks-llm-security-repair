@@ -1,0 +1,6 @@
+  gpt/CVE-2023-47163: NOT_VERIFIED A=0 F=0 S=0 V=0 FA=1 func_rc=None expl_rc=None claim=1 (0.2s)
+  gpt/CVE-2024-6866: NOT_VERIFIED A=0 F=0 S=0 V=0 FA=1 func_rc=None expl_rc=None claim=1 (0.2s)
+  gpt/CVE-2025-43859: NOT_VERIFIED A=0 F=0 S=0 V=0 FA=1 func_rc=None expl_rc=None claim=1 (0.2s)
+  gpt/CVE-2025-46656: NOT_VERIFIED A=0 F=0 S=0 V=0 FA=1 func_rc=None expl_rc=None claim=1 (0.2s)
+  gpt/CVE-2025-59940: NOT_VERIFIED A=0 F=0 S=0 V=0 FA=1 func_rc=None expl_rc=None claim=1 (0.6s)
+[done] gpt: completos=5 incompletos=0 verificados=0 plausible_estricto=0/5 (regla original aceptando 999: 0)
