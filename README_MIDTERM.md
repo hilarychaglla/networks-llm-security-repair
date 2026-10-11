@@ -108,7 +108,7 @@ Confianza media declarada: 0.884. Latencia media: 14.7 s.
 
 - Se excluyó `backported_support/` del contexto del LLM: sus archivos son idénticos a los de `fixed/`
   (`cmp`), porque `vul4py.py` los copia desde la versión corregida (`backport_artifacts`). Enviarlos habría
-  entregado la solución al modelo. El script original de generación los incluía a través de `new_code_files`.
+  entregado la solución al modelo. Mi primera versión del selector (que recorre todos los `.py` de `vulnerable/`) los habría incluido, como mostró el `--dry-run`; se detectó antes de generar los intentos reales. El script original elegía los archivos a partir de `new_code_files` de `meta.json` (los archivos que cambia el arreglo), lo que también revela dónde está la corrección; esa información no se usa.
 - Se excluyeron `tests/`, `.venv`, `.git`, `docs` y similares, y no se usó `meta.json`, ni el ID del CVE, ni el commit.
 - No se envía `temperature` (el ejemplo del enunciado no la envía).
 - El prompt fijo conserva la errata "interner" del enunciado para que sea idéntico al original.
@@ -138,3 +138,23 @@ Confianza media declarada: 0.884. Latencia media: 14.7 s.
 2a06:98c1:58::f3 api.openai.com
 dns=0.001791s tcp_acumulado=0.003311s tls_acumulado=0.017337s total=0.111258s http=401
 ```
+
+## 12. Análisis a posteriori: archivos que tocó el modelo frente al arreglo oficial
+
+Comparación descriptiva hecha DESPUÉS de congelar las respuestas (el modelo nunca recibió `fixed/`). Coincidir en el
+archivo no implica que el parche sea correcto; los parches no se pudieron aplicar, así que no se evaluó su contenido.
+
+| Caso | Archivo que toca el parche del modelo | Archivos de código del arreglo oficial | Coincidencia |
+|---|---|---|---|
+| CVE-2023-47163 | remarshal.py | remarshal.py (y pyproject.toml) | mismo archivo de código |
+| CVE-2025-46656 | markdownify/__init__.py | markdownify/__init__.py | mismo archivo |
+| CVE-2024-6866 | flask_cors/extension.py | flask_cors/core.py y flask_cors/extension.py | parcial (1 de 2) |
+| CVE-2025-59940 | src/mkdocs_include_markdown_plugin/process.py | event.py (modificado) y placeholders.py (archivo nuevo) | distinto |
+| CVE-2025-43859 | h11/_readers.py | h11/_readers.py | mismo archivo |
+
+## 13. Interpretación de la medición de red
+
+Medición con curl desde la EC2 (HTTP/2, sin clave, respuesta 401): DNS 1.8 ms; handshake TCP de 1.5 ms (3.311 - 1.791);
+handshake TLS de 14.0 ms (17.337 - 3.311); resto hasta completar la respuesta 93.9 ms (111.258 - 17.337); total 111.3 ms.
+Abrir la conexión (DNS + TCP + TLS, unos 17.3 ms) equivale a entre el 0.09 % y el 0.22 % de la latencia de una llamada
+real (7.8 a 19.3 s). El tiempo lo domina la generación del modelo, no la red.
