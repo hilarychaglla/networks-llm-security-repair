@@ -1,0 +1,34 @@
+{
+  "agent": "gpt",
+  "vuln_id": "CVE-2023-30608",
+  "apply_ok": true,
+  "functional_rc": 0,
+  "exploit_rc": 0,
+  "plausible": true,
+  "elapsed_s": 24.7,
+  "notes": "",
+  "claim": null,
+  "confidence": null,
+  "llm_error_type": null,
+  "patch_applied": 1,
+  "functional_pass": 1,
+  "security_pass": 1,
+  "verified_repair": 1,
+  "false_assurance": null,
+  "verification_status": "complete",
+  "incomplete_reason": null,
+  "functional_state": "ok",
+  "exploit_state": "ok",
+  "functional_rc_all": [
+    0
+  ],
+  "exploit_rc_all": [
+    0
+  ],
+  "patch_check": null,
+  "plausible_legacy": true,
+  "frozen_ok": null,
+  "patch_sha256": "b72f9c3eb1b826a452c2905f9d0bd03e05180046e1458002d482320c0771e4d3",
+  "evaluated_at_utc": "2026-10-11T22:12:52.678193+00:00",
+  "evaluator_version": "midterm-v1"
+}
