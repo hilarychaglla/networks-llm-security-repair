@@ -56,7 +56,7 @@ INFRA_RCS = {4}             # fallo de entorno (INFRA_BROKEN en scan_report.tsv)
 # --------------------------------------------------------------------------------------------
 
 Res = namedtuple("Res", "returncode stdout stderr timed_out")
-RC_RE = re.compile(r"(?<![A-Za-z0-9])rc\s*=\s*(-?\d+)")
+RC_LINE_RE = re.compile(r"^\s*(?:[\w.\-]+:\s*)?rc=(-?\d+)\s*$")
 
 
 def utc_now() -> str:
@@ -118,13 +118,15 @@ def run_vul4py(args: List[str], log_lines: list, timeout: int) -> Res:
     return res
 
 
-def parse_rc_all(*texts: str) -> List[int]:
-    """Todos los 'rc=<numero>' del primer texto que tenga alguno (stdout primero, luego stderr)."""
-    for t in texts:
-        found = [int(x) for x in RC_RE.findall(t or "")]
-        if found:
-            return found
-    return []
+def parse_rc_all(stdout: str) -> List[int]:
+    """Lineas 'rc=<n>' o '<objetivo>: rc=<n>' de STDOUT. No se lee stderr: ahi aparece
+    'Command failed (rc=...)' cuando falla el entorno, y eso no es una prueba fallida."""
+    found = []
+    for line in (stdout or "").splitlines():
+        m = RC_LINE_RE.match(line)
+        if m:
+            found.append(int(m.group(1)))
+    return found
 
 
 def interpret_rc(rc: Optional[int]):
@@ -271,7 +273,7 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
         if func.timed_out:
             f_pass, f_state, f_rc, f_all = None, "timeout", None, []
         else:
-            f_all = parse_rc_all(func.stdout, func.stderr)
+            f_all = parse_rc_all(func.stdout)
             f_rc = f_all[-1] if f_all else None
             f_pass, f_state = interpret_rc(f_rc)
         v["functional_rc"], v["functional_state"], v["functional_rc_all"] = f_rc, f_state, f_all
@@ -282,7 +284,7 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
         if expl.timed_out:
             s_pass, s_state, s_rc, s_all = None, "timeout", None, []
         else:
-            s_all = parse_rc_all(expl.stdout, expl.stderr)
+            s_all = parse_rc_all(expl.stdout)
             s_rc = s_all[-1] if s_all else None
             s_pass, s_state = interpret_rc(s_rc)
         v["exploit_rc"], v["exploit_state"], v["exploit_rc_all"] = s_rc, s_state, s_all
