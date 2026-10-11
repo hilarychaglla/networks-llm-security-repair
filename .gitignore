@@ -1,35 +1,39 @@
+
+# agent outputs (re-creatable from prompts + scripts/run_agent.py)
 # cloned source trees (re-creatable from dataset/vul4py.csv)
+# editor / OS
+# misc
+# paper-experiment scripts kept out of the public release
+# python
+# secrets
+*.log
+*.orig
+*.pyc
+*.pyo
+*.roto
+*.tmp
+.DS_Store
+.env
+.env.local
+.idea/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.vscode/
+__pycache__/
+candidates.txt
+eval_*.log
+eval_dev.log
+evaluate_stdout.log
+prepare.log
+runs/*/
+scan.log
+scripts/build_review.py
+scripts/openrouter_balance.py
+scripts/stage_appatch.py
+sizes.txt
 workspaces/*/
 workspaces/.vul4py_tools/
 workspaces/prepare_summary.tsv
 workspaces/scan_report.tsv
-
-# agent outputs (re-creatable from prompts + scripts/run_agent.py)
-runs/*/
-
-# paper-experiment scripts kept out of the public release
-scripts/stage_appatch.py
-scripts/build_review.py
-scripts/openrouter_balance.py
-
-# python
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# secrets
-.env
-.env.local
-
-# editor / OS
-.DS_Store
-.idea/
-.vscode/
-
-# misc
-*.log
-*.tmp

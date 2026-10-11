@@ -47,7 +47,7 @@ SYSTEM_PROMPT = (
     "You don't have access to the interner nor external tools."
 )
 
-EXCLUDE_DIRS = {".git", ".venv", "venv", "env", ".tox", "site-packages", "node_modules",
+EXCLUDE_DIRS = {"backported_support", ".git", ".venv", "venv", "env", ".tox", "site-packages", "node_modules",
                 "build", "dist", "docs", ".eggs", "__pycache__", ".pytest_cache", ".github"}
 MAX_FILES = 60
 MAX_BYTES = 150_000
