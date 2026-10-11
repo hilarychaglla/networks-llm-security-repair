@@ -67,13 +67,21 @@ The LLM never receives these results, and its response is frozen prior to evalua
 
 ## 7. Results per Attempt
 
-| Case | Project | C | P | A | F | S | V | FA | Latency | Tokens in/out |
-|---|---|---|---|---|---|---|---|---|---|---|---|
+| Case | Project | C | P | A | F | S | V | FA | Latency | Tokens ent./sal. |
+
+|---|---|---|---|---|---|---|---|---|---|---|
+
 | CVE-2023-47163 | remarshal | 1 | 0.84 | 0 | 0 | 0 | 0 | 1 | 17.0 s | 4313 / 1638 |
+
 | CVE-2025-46656 | python-markdownify | 1 | 0.91 | 0 | 0 | 0 | 0 | 1 | 19.3 s | 5126 / 2255 |
+
 | CVE-2024-6866 | flask-cors | 1 | 0.81 | 0 | 0 | 0 | 0 | 1 | 16.6 s | 9071 / 1798 |
+
 | CVE-2025-59940 | mkdocs-include-markdown-plugin | 1 | 0.87 | 0 | 0 | 0 | 0 | 1 | 13.0 s | 14615 / 1322 |
+
 | CVE-2025-43859 | h11 | 1 | 0.99 | 0 | 0 | 0 | 0 | 1 | 7.8 s | 26873 / 851 |
+
+
 
 Calculation: N = 5; sum C = 5; sum V = 0; sum FA = 5; VRR = 0/5 = 0 %; FAR = 5/5 = 100 %.
 Mean reported confidence: 0.884. Mean latency: 14.7 s.
