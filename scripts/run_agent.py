@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""
-run_agent.py  (version del midterm "Extend Vul4Py")
 
-Genera parches con un LLM y CONGELA el intento: claim, confianza y parche.
-
-Disposicion que produce (una carpeta por (agent, vuln_id)):
-    runs/<agent>/<vuln_id>/
-        prompt.txt          -- mensaje de usuario enviado (solo codigo vulnerable)
-        patch.diff          -- parche (unified diff contra vulnerable/)
-        generation.json     -- metadatos (modelo, tokens, tiempos, error); compatible con el original
-        llm_response.json   -- registro completo: respuesta original, claim, confianza, parche,
-                               modelo, tokens, latencia, hora y errores
-        frozen.sha256       -- hashes; se verifican con:  sha256sum -c frozen.sha256
-Los archivos quedan en SOLO LECTURA. Un caso congelado NO se regenera.
-
-Agentes integrados (llamada directa al LLM): claude, gpt
-Agentes externos (este script no los ejecuta): openhands, trae, swe
-"""
 from __future__ import annotations
 
 import argparse
