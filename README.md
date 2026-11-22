@@ -1,7 +1,9 @@
 # Midterm: Extend Vul4Py — False Assurance (FAR) and VRR with gpt-6-luna
 
 Individual repository. Based on https://github.com/tabudz/vul4py (base commit `2649d7b89e796738ebc2bc3fa9480dff5ae15898`).
-Commit containing the v1 results: `52b13f5`. The v2 results are in the commit "Add midterm v2 results" (Section 7b).
+Commit containing the v1 results: `52b13f5` (generated on 2026-10-11). Commit containing the v2 results: `149476d` (generated on 2026-11-22). The reference control is in `0f5b0c5`.
+
+All documentation, code comments and console messages are in English. Logs and frozen records produced before the translation (for example `eval.log`, `eval_midterm.log` and the `parse_warnings` of the v1 records) contain Spanish console messages; they are kept verbatim because they are evidence.
 
 ## 1. Summary
 
@@ -37,6 +39,18 @@ All five patches arrived in `*** Begin Patch / *** Update File` format rather th
 
 Specifying the format let three patches apply, so functional and security tests ran for the first time. None of the three passed its security test, and one broke unrelated functionality, while the model claimed success in all five cases with a mean confidence of 0.89. A reference control (the official fix through the same evaluator) confirms the instrument for two of the three applied cases and shows that the third is not verifiable by any patch (Section 7b).
 
+## Grading components and where the evidence is
+
+| Component (weight) | Evidence |
+|---|---|
+| Network/API pipeline (2.0 %) | `scripts/run_agent.py`: one HTTPS request per case with the official client, no retries, 300 s timeout, error classification (401, 429, 5xx, timeout, connection), latency, tokens, model ID and timestamp recorded, attempts frozen with SHA-256 and read-only (Sections 4 and 5); API errors demonstrated without cost in `demo.sh` step 12 |
+| Vul4Py integration and independent verification (1.5 %) | `scripts/evaluate.py` runs Vul4Py's `fork`, `functional` and `exploit` commands on a copy of the vulnerable project; verdicts from pytest junit reports; the model never sees the results (Section 6); positive and reference controls validate the instrument (Sections 7b and 15) |
+| False Assurance + VRR implementation (1.5 %) | `scripts/aggregate_results.py` (Section 3 formulas, incomplete records outside N, FAR undefined when sum C = 0); `tests/test_metrics.py` reproduces the assignment example (VRR 40 %, FAR 50 %) |
+| GitHub and reproducibility (1.0 %) | Incremental commits; `requirements.txt`; 44 automated tests (`python -m pytest tests/ -v`); `demo.sh`; installation and execution commands (Section 3); every result can be recomputed from the committed files (Section 19) |
+| Networking understanding (1.5 %) | Section 13: what happens over the network during one call (DNS, TCP, TLS 1.3, HTTPS, status codes, latency) and three measurements from the EC2 instance; raw outputs in `submission/network_measurement.md` |
+| Results and interpretation (1.0 %) | Sections 1, 7, 7b and 8: per-attempt tables, VRR and FAR for both conditions, per-case causes of failure, reference control, sensitivity analysis and limits |
+| Individual technical defense (1.5 %) | Section 16 lists what I can explain; `demo.sh` walks through the whole system |
+
 ## Requirements map (where each requirement is met)
 
 | Assignment requirement | Where |
@@ -48,7 +62,7 @@ Specifying the format let three patches apply, so functional and security tests 
 | Repository commit, model, prompt, five IDs (4.4) | Sections 2 and 7b, `submission/prompt.txt`, `submission/prompt_v2.txt`, `submission/selected_ids.txt` |
 | Original responses, patches, generation/evaluation records, test logs (4.4) | `submission/runs_midterm/`, `submission/runs_midterm_v2/` |
 | Per-attempt table, VRR, FAR, interpretation (4.4) | Sections 1, 7, 7b and 8 |
-| README: install, run, API use, Vul4Py verification, VRR/FAR, network (7.5) | Sections 3, 5, 6, 7, 13 and "What happens over the network" |
+| README: install, run, API use, Vul4Py verification, VRR/FAR, network (7.5) | Sections 3, 5, 6, 7, 7b and 13 |
 | Meaningful commits, no credentials (6) | `git log`; Section 17 |
 | Status of each case (8) | Section 14 |
 | Reproducibility | `requirements.txt`, `tests/` (`python -m pytest tests/`), `demo.sh` |
@@ -63,6 +77,7 @@ Specifying the format let three patches apply, so functional and security tests 
 | Fixed prompt v1 (official) | `submission/prompt.txt` (statement text, including its typo "interner") |
 | Fixed prompt v2 (second condition) | `submission/prompt_v2.txt`: same request, specifying a unified diff with `--- a/<path>` / `+++ b/<path>` headers and the JSON keys `diff`, `claim`, `confidence` |
 | Attempts per case | 1. No retries, no regeneration, no manual patch editing |
+| Generation dates (UTC) | v1: 2026-10-11; v2: 2026-11-22 (per-attempt timestamps in `llm_response.json` and `submission/v2/results.csv`) |
 
 ## 3. Installation and Execution
 
@@ -101,7 +116,7 @@ The key is only exported in the terminal; it is never stored in files or commits
 
 ## 5. How the OpenAI API is Used
 
-One HTTPS `POST` request per case (official `openai` client, `max_retries=0`, 300 s timeout). The system message is the fixed prompt (v1 or v2), and the user message contains only the `.py` files of the vulnerable project (no tests, no virtual environments, no `meta.json`, no CVE ID, no fix commit, and no `fixed/`). The response is JSON containing the diff, the claim (`patched` or `claim` field depending on response), and confidence. Latency is measured using `time.perf_counter()` strictly around the request.
+One HTTPS `POST` request per case (official `openai` client, `max_retries=0`, 300 s timeout). The system message is the fixed prompt (v1 or v2), and the user message contains only the `.py` files of the vulnerable project (no tests, no virtual environments, no `meta.json`, no CVE ID, no fix commit, and no `fixed/`). The response is a JSON object with the diff, the claim and the confidence. The v1 prompt does not name the keys, so the parser accepts several names (`diff`/`patch`/`diff_file`, `claim`/`claimed_success`/`patched`, `confidence`/`confidence_level`); the v2 prompt names them (`diff`, `claim`, `confidence`). Latency is measured using `time.perf_counter()` strictly around the request.
 
 ## 6. How Vul4Py Verifies
 
@@ -205,18 +220,23 @@ To check whether the failures come from the model's patches or from the instrume
 
 ## 10. Incidents and Status
 
-- Status: all 5 cases COMPLETE (5 of 5 complete observations, 0 incomplete).
+- Status: all 5 cases COMPLETE in both conditions (v1: 5 of 5, v2: 5 of 5 complete observations, 0 incomplete).
+- During the v2 session the SSH connection dropped after the five attempts had been generated and frozen; evaluation was then run from a `tmux` session. No attempt was regenerated (all five `frozen.sha256` files verify).
 - Prior to the actual attempts, the pipeline was tested using cases `CVE-2023-30608` and `CVE-2022-3102` (`runs/dev` folder, outside the results set) with real API calls; an API failure with no response occurred during one of those tests.
 - An accidental execution of `run_agent.py` from an incorrect directory failed before calling the API (`can't open file`): no additional attempt was generated.
 - The course API key appeared in plaintext in the assignment text; it was not written to any file.
 
 ## 11. Delivered Files
 
-`submission/`: `results.csv`, `results_table.md`, `metrics.json`, `selected_ids.txt`, `prompt.txt`, `scan_report.tsv`, `eval_midterm.log`, and `runs_midterm/gpt/<CVE>/` containing `llm_response.json`, `patch.diff`, `generation.json`, `prompt.txt`, `frozen.sha256`, `eval.json`, `eval.log`, and `eval_history.jsonl`.
+- `submission/` (v1): `results.csv`, `results_table.md`, `metrics.json`, `selected_ids.txt`, `prompt.txt`, `scan_report.tsv`, `eval_midterm.log`, and `runs_midterm/gpt/<CVE>/` containing `llm_response.json`, `patch.diff`, `generation.json`, `prompt.txt`, `frozen.sha256`, `eval.json`, `eval.log`, and `eval_history.jsonl`.
+- `submission/` (v2): `prompt_v2.txt`; `v2/results.csv`, `v2/results_table.md`, `v2/metrics.json`; `runs_midterm_v2/gpt/<CVE>/` with the same files as v1 plus `test_logs/` (patch log, functional and exploit logs, and their junit reports).
+- `submission/v2/reference_control/<CVE>/`: reference patch, `eval.json`, `eval.log` and `test_logs/` (Section 7b).
+- `submission/network_measurement.md`: raw network measurements (Section 13).
+- `submission/validation/`: controls run before the experiment (Section 15): `positive_control/` and `dev_llm/`.
 
 ## 12. Post-Hoc Analysis: Files Touched by the Model vs. Official Fix
 
-Descriptive comparison performed AFTER freezing responses (the model never received `fixed/`). Matching on the file does not imply the patch is correct; patches could not be applied, so their content was not evaluated.
+Descriptive comparison of the **v1** patches, performed AFTER freezing the responses (the model never received `fixed/`). Matching on the file does not imply the patch is correct; the v1 patches could not be applied, so their content was not evaluated. The v2 patches were executed; see Section 7b.
 
 | Case | File touched by model patch | Official fix code files | Match |
 |---|---|---|---|
@@ -226,7 +246,9 @@ Descriptive comparison performed AFTER freezing responses (the model never recei
 | CVE-2025-59940 | src/mkdocs_include_markdown_plugin/process.py | event.py (modified) and placeholders.py (new file) | different |
 | CVE-2025-43859 | h11/_readers.py | h11/_readers.py | same file |
 
-## What happens over the network during one API call
+## 13. Networking
+
+### 13.1 What happens over the network during one API call
 
 1. **DNS.** Before connecting, the client must translate the name `api.openai.com` into an IP address, because IP packets carry addresses, not names. The EC2 resolver answered with A records (IPv4, e.g. 162.159.140.245) and AAAA records (IPv6, e.g. `2606:4700:7::f3`), both in Cloudflare's network, which fronts the API. If DNS fails, no connection can be opened and the client raises a connection error.
 2. **TCP.** The client opens a TCP connection to port 443 with the three-way handshake (SYN, SYN-ACK, ACK). TCP gives a reliable, ordered byte stream: the prompt with the source code spans many packets, and TCP retransmits lost ones and reorders them.
@@ -235,9 +257,9 @@ Descriptive comparison performed AFTER freezing responses (the model never recei
 5. **HTTPS response.** The server answers with a status code (200 on success; 401 invalid or missing key; 429 rate limit or quota; 5xx server error) and a JSON body with the model's text and token usage. The script performs a single attempt (`max_retries=0`) with a 300 s timeout; failures without a response are logged in `api_errors.jsonl` and nothing is frozen.
 6. **Latency.** The assignment defines L = 1000 (t_response − t_request) ms. The script implements it with `time.perf_counter()` (a monotonic clock, unaffected by system clock changes) around the request, so L includes connection setup, upload, model generation and download.
 
-## 13. Interpretation of Network Measurements
+### 13.2 Network measurements and their interpretation
 
-Raw output of measurement 1 (EC2, 2026-10-11), also in `submission/red_medicion.md`:
+Raw output of measurement 1 (EC2, 2026-10-11), also in `submission/network_measurement.md` (`tcp_acumulado` and `tls_acumulado` are the Spanish labels typed in the command, meaning "cumulative"):
 
     2606:4700:7::f3 api.openai.com
     2a06:98c1:58::f3 api.openai.com
@@ -245,19 +267,21 @@ Raw output of measurement 1 (EC2, 2026-10-11), also in `submission/red_medicion.
 
 The 401 is expected: these measurements were made without an API key, to time the connection without spending tokens.
 
-Two curl measurements from EC2 (HTTP/2, no key, 401 response). Curl times are cumulative; phases are obtained by subtraction:
+Three curl measurements from EC2 (HTTP/2, no key, 401 response). Curl times are cumulative; phases are obtained by subtraction:
 
-| Phase | Measurement 1 | Measurement 2 |
-|---|---|---|
-| DNS | 1.8 ms | 1.5 ms |
-| TCP Handshake (connect - DNS) | 1.5 ms | 1.9 ms |
-| TLS Handshake (appconnect - connect) | 14.0 ms | 12.8 ms |
-| Remainder until response complete | 93.9 ms | 63.4 ms |
-| Total | 111.3 ms | 79.5 ms |
+| Phase | Measurement 1 (2026-10-11) | Measurement 2 (2026-10-11) | Measurement 3 (2026-11-22) |
+|---|---|---|---|
+| DNS | 1.8 ms | 1.5 ms | 0.7 ms |
+| TCP handshake (connect − DNS) | 1.5 ms | 1.9 ms | 1.9 ms |
+| TLS handshake (appconnect − connect) | 14.0 ms | 12.8 ms | 13.8 ms |
+| Remainder until the response is complete | 93.9 ms | 63.4 ms | 89.8 ms |
+| Total | 111.3 ms | 79.5 ms | 106.2 ms |
+
+The raw output of measurement 2 was not saved. Measurement 3 also records the TLS details shown by `curl -v` (`submission/network_measurement.md`).
 
 Observed connection: IPv4 162.159.140.245 (range suggests a Cloudflare address), port 443, TLS 1.3 (`TLS_AES_256_GCM_SHA384`, x25519 key exchange), api.openai.com certificate issued by Google Trust Services, and HTTP/2 negotiated via ALPN. The Python client (`httpx`) uses HTTP/1.1 by default and creates a new connection per case.
 
-Opening the connection (DNS + TCP + TLS) costs about 16 to 17 ms, representing between 0.08% and 0.22% of a real call's latency (7.8 to 19.3 s). Model generation dominates the time, not the network.
+Opening the connection (DNS + TCP + TLS) costs about 16 to 17 ms, which is below 0.4 % of a real call's latency (4.8 to 22.0 s across both conditions). Model generation dominates the time, not the network. The TLS handshake is the largest connection phase because it needs a full round trip plus certificate validation and key derivation, while the DNS answer comes from the VPC resolver in about 1 ms.
 
 ## 14. Status of Cases (Section 8 of the Assignment)
 
@@ -286,7 +310,7 @@ Additional incidents (no effect on results):
 
 ## 15. Validation Controls (Outside the sample of 5; not part of results)
 
-Prior to generating the five attempts, each piece was validated using test cases (copies in `submission/validation/`):
+Prior to generating the five attempts, each piece was validated using test cases (copies in `submission/validation/positive_control/` and `submission/validation/dev_llm/`):
 
 - Invalid patch: the model's actual response for `CVE-2023-30608` (`*** Begin Patch` format) gave A = 0, F = S = 0, V = 0, and FA = 1.
 - Positive control: to verify that the evaluator recognizes a correct repair, a patch was constructed from the official fix for `CVE-2023-30608` STRICTLY to validate the evaluator (never given to the model). Result: A = 1, F = 1, S = 1, V = 1.
@@ -299,24 +323,24 @@ Prior to generating the five attempts, each piece was validated using test cases
 
 ## 16. Academic Integrity and AI Use (Section 9 of the Assignment)
 
-Claude (Anthropic), a tool permitted by the instructions, was used to understand Vul4Py and API documentation, debug errors, and improve the implementation. I executed, tested, and reviewed every script and result, and I am responsible for understanding the delivered system: I can explain the code, modify a part, diagnose an API error, calculate VRR and FAR, explain a false assurance case, explain DNS, TCP, TLS, and HTTPS, explain why the LLM does not see Vul4Py's results, and explain why `patch.diff` is frozen prior to evaluation.
+Claude (Anthropic), a tool permitted by the instructions, was used to understand Vul4Py and API documentation, debug errors, improve the implementation, and review the v2 changes (junit-based verdicts, `--recount`, prompt v2, automated tests, reference control) and the documentation. I executed, tested, and reviewed every script and result, and I am responsible for understanding the delivered system: I can explain the code, modify a part, diagnose an API error, calculate VRR and FAR, explain a false assurance case, explain DNS, TCP, TLS, and HTTPS, explain why the LLM does not see Vul4Py's results, explain why `patch.diff` is frozen prior to evaluation, and explain why each v2 attempt failed and what the reference control shows.
 
 ## 17. Security and Ethics (Section 10 of the Assignment)
 
 - Only the Vul4Py benchmark and authorized resources were used (the course EC2 instance and course API key).
 - No external systems were attacked. Vul4Py functional and exploit tests were run exclusively locally inside the EC2, and no vulnerable application was deployed publicly.
-- Credentials: the API key is not present in any file or commit (searching the repository for the pattern `sk-...` yields no results) and is exported in the terminal using `read -s`. Incident: prior to adopting `read -s`, the key was written once directly to an EC2 terminal; the Bash history was subsequently cleared. The course key also appears in plaintext in the assignment text, so rotating it is recommended.
+- Credentials: the API key is not present in any file or commit (searching the whole Git history for the patterns `sk-...` and `ghp_...` yields no results) and is exported in the terminal using `read -s`. Incident: prior to adopting `read -s`, the key was written once directly to an EC2 terminal; the Bash history was subsequently cleared. The course key also appears in plaintext in the assignment text, so rotating it is recommended.
 
 ## 18. Scaling (Section 11 of the Assignment)
 
 N_experiments = N_cases x N_models x N_runs. This work: 5 x 1 x 1 = 5. Assignment example: 100 x 2 x 3 = 600.
 The pipeline requires no redesign; it is simply repeated with different parameters:
 
-    for modelo in MODELO_A MODELO_B; do
+    for model in MODEL_A MODEL_B; do
       for k in 1 2 3; do
-        python scripts/run_agent.py --agent gpt --model $modelo --ids-file ids.txt --runs runs/${modelo}_run${k}
-        python scripts/evaluate.py --agent gpt --runs runs/${modelo}_run${k}
-        python scripts/aggregate_results.py --runs runs/${modelo}_run${k} --agents gpt --ids-file ids.txt --out-dir resultados/${modelo}_run${k}
+        python scripts/run_agent.py --agent gpt --model $model --prompt-version v2 --ids-file ids.txt --runs runs/${model}_run${k}
+        python scripts/evaluate.py --agent gpt --runs runs/${model}_run${k}
+        python scripts/aggregate_results.py --runs runs/${model}_run${k} --agents gpt --ids-file ids.txt --out-dir results/${model}_run${k}
       done
     done
 
@@ -344,7 +368,7 @@ Considerations for scaling based on observations:
 | Automated tests | `tests/` (`python -m pytest tests/ -v`) |
 | Per-attempt table, metrics | `submission/results.csv`, `results_table.md`, `metrics.json` |
 | Fixed prompts, IDs, scan report | `submission/prompt.txt` (v1), `submission/prompt_v2.txt` (v2), `selected_ids.txt`, `scan_report.tsv` |
-| Network measurement | `submission/red_medicion.md` and Section 13 |
-| Validation controls | `submission/validation/` |
+| Network measurement | `submission/network_measurement.md` and Section 13 |
+| Validation controls | `submission/validation/positive_control/`, `submission/validation/dev_llm/` |
 | Demonstration script | `demo.sh` |
 | Original Vul4Py README | `README_VUL4PY.md` |
