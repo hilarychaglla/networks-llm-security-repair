@@ -21,6 +21,14 @@ Reglas:
   * Si la verificacion no puede terminar (timeout, error de entorno, sin pruebas, rc no leido):
     registro INCOMPLETO. Nunca se cuenta como exito ni como fallo demostrado.
   * rc 999 = "no hay pruebas": NO es una prueba funcional aprobada.
+  * F y S se deciden con el informe junit XML que pytest escribe (el mismo que usa vul4py.py),
+    no solo con el codigo de retorno:
+        pasa   (1): 0 fallidas, 0 con error y al menos 1 aprobada
+        falla  (0): al menos 1 fallida o con error (incluye errores de recoleccion causados por el parche)
+        incompleto: no hay junit (pytest no llego a correr), o se recolectaron 0 pruebas / todas
+                    saltadas (rc 5 de pytest): una prueba saltada no demuestra nada.
+    Excepcion: rc >= 128 sin junit = el proceso murio por una senal (crash provocado por el
+    exploit); vul4py.py lo trata como resultado real, aqui tambien (prueba fallida).
   * El claim y la confianza se leen de llm_response.json (ya congelado). El modelo nunca ve estos resultados.
 
 Este script usa scripts/vul4py.py para fork / functional / exploit, igual que el original.
@@ -45,15 +53,20 @@ WORKSPACES = HERE / "workspaces"
 RUNS = HERE / "runs"
 VUL4PY = Path(__file__).resolve().parent / "vul4py.py"
 
-EVALUATOR_VERSION = "midterm-v1"
+# Se reutiliza el lector de junit del propio benchmark (solo usa la biblioteca estandar),
+# para que el evaluador y el scan de Vul4Py cuenten las pruebas exactamente igual.
+sys.path.insert(0, str(VUL4PY.parent))
+from vul4py import _parse_junit  # noqa: E402
 
-# ---- Como se interpretan los codigos de retorno (AJUSTAR si vul4py.py dice otra cosa) ----
-NO_TESTS_RCS = {999}        # no hay pruebas: incompleto
-TIMEOUT_RCS = {124, -2}     # tiempo agotado: incompleto
-INFRA_RCS = {4}             # fallo de entorno (INFRA_BROKEN en scan_report.tsv): incompleto
-# Cualquier rc negativo tambien se trata como fallo de entorno (proceso terminado por senal).
-# rc == 0 es prueba aprobada; cualquier otro rc positivo es una prueba fallida atribuible al parche.
-# --------------------------------------------------------------------------------------------
+EVALUATOR_VERSION = "midterm-v2"
+
+# ---- Codigos de retorno que NO dependen del junit ----
+NO_TESTS_RCS = {999}        # vul4py.py: no hay archivos de prueba -> incompleto
+TIMEOUT_RCS = {124, -2}     # tiempo agotado -> incompleto
+# rc < 0 (excepto -2): excepcion en el runner de vul4py.py -> incompleto (fallo de entorno)
+# rc >= 128 sin junit: el proceso murio por una senal (crash) -> prueba fallida
+# Todo lo demas se decide con el junit XML (ver interpret).
+# --------------------------------------------------------
 
 Res = namedtuple("Res", "returncode stdout stderr timed_out")
 RC_LINE_RE = re.compile(r"^\s*(?:[\w.\-]+:\s*)?rc=(-?\d+)\s*$")
@@ -129,19 +142,44 @@ def parse_rc_all(stdout: str) -> List[int]:
     return found
 
 
-def interpret_rc(rc: Optional[int]):
-    """-> (paso: True/False/None, estado). None = no se puede concluir (incompleto)."""
+def interpret(rc: Optional[int], junit: Optional[dict]):
+    """Veredicto de UNA ejecucion de pruebas (funcional o de exploit).
+    -> (paso: True / False / None, estado). None = no se puede concluir (incompleto)."""
     if rc is None:
         return None, "rc_not_found"
-    if rc == 0:
-        return True, "ok"
     if rc in NO_TESTS_RCS:
         return None, "no_tests"
     if rc in TIMEOUT_RCS:
         return None, "timeout"
-    if rc < 0 or rc in INFRA_RCS:
+    if rc < 0:
         return None, "infra_error"
-    return False, "ok"          # la prueba corrio y fallo: atribuible al parche
+    if junit is None:
+        if rc >= 128:                     # crash por senal: resultado real de la prueba
+            return False, "ok"
+        return None, "infra_error_no_junit"   # pytest no llego a ejecutar las pruebas
+    if junit["failed"] == 0 and junit["errored"] == 0 and junit["passed"] >= 1:
+        return True, "ok"
+    if junit["failed"] > 0 or junit["errored"] > 0:
+        return False, "ok"
+    return None, "no_tests_executed"      # 0 recolectadas o todas saltadas
+
+
+def junit_summary(junit: Optional[dict]) -> Optional[dict]:
+    """Conteos para eval.json (evidencia), con a lo sumo 20 pruebas fallidas listadas."""
+    if junit is None:
+        return None
+    out = {k: junit[k] for k in ("tests", "passed", "failed", "errored", "skipped")}
+    out["failed_cases"] = [f"{c.get('file') or c.get('classname')}::{c.get('name')}"
+                           for c in junit.get("failed_cases", [])[:20]]
+    return out
+
+
+def remove_stale(path: Path):
+    """Borra un junit de una evaluacion anterior para que nunca se lea por error."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def patch_precheck(vuln_dir: Path, patch: Path):
@@ -213,6 +251,7 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
         # --- evidencia ---
         "functional_state": None, "exploit_state": None,
         "functional_rc_all": [], "exploit_rc_all": [],
+        "functional_junit": None, "exploit_junit": None,
         "patch_check": None, "plausible_legacy": False,
         "frozen_ok": None, "patch_sha256": None,
         "evaluated_at_utc": utc_now(), "evaluator_version": EVALUATOR_VERSION,
@@ -267,7 +306,12 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
         v["apply_ok"] = True
         v["patch_applied"] = 1
 
+        logs_dir = case_dir / "logs"
+        f_junit_path = logs_dir / f"functional_{dst_name}.junit.xml"
+        s_junit_path = logs_dir / f"exploit_{dst_name}.junit.xml"
+
         # ---------- F: pruebas funcionales ----------
+        remove_stale(f_junit_path)
         func = run_vul4py(["--workspace-root", str(workspaces), "--cve-id", vuln_id,
                            "functional", "--target", dst_name], log, timeout)
         if func.timed_out:
@@ -275,10 +319,13 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
         else:
             f_all = parse_rc_all(func.stdout)
             f_rc = f_all[-1] if f_all else None
-            f_pass, f_state = interpret_rc(f_rc)
+            f_junit = _parse_junit(f_junit_path)
+            f_pass, f_state = interpret(f_rc, f_junit)
+            v["functional_junit"] = junit_summary(f_junit)
         v["functional_rc"], v["functional_state"], v["functional_rc_all"] = f_rc, f_state, f_all
 
         # ---------- S: prueba de exploit / seguridad ----------
+        remove_stale(s_junit_path)
         expl = run_vul4py(["--workspace-root", str(workspaces), "--cve-id", vuln_id,
                            "exploit", "--targets", dst_name], log, timeout)
         if expl.timed_out:
@@ -286,7 +333,9 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
         else:
             s_all = parse_rc_all(expl.stdout)
             s_rc = s_all[-1] if s_all else None
-            s_pass, s_state = interpret_rc(s_rc)
+            s_junit = _parse_junit(s_junit_path)
+            s_pass, s_state = interpret(s_rc, s_junit)
+            v["exploit_junit"] = junit_summary(s_junit)
         v["exploit_rc"], v["exploit_state"], v["exploit_rc_all"] = s_rc, s_state, s_all
 
         v["functional_pass"] = None if f_pass is None else int(f_pass)
