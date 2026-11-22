@@ -102,6 +102,14 @@ Amazon Linux 2023 (EC2), Python 3.12.
     python scripts/aggregate_results.py --runs runs/midterm_v2 --agents gpt --ids-file submission/selected_ids.txt --out-dir submission/v2
 
     python -m pytest tests/ -v      # automated checks of the rules, no API calls
+    bash demo.sh                    # guided demonstration; never uses a real API key
+
+**Live demonstration (assignment Section 12).** To show API communication, patch generation and verification live, run one real attempt on a case with status `OK` that is *not* one of the five selected cases, in its own folder, so the results above are not affected:
+
+    read -s -p "API key: " OPENAI_API_KEY && export OPENAI_API_KEY
+    python scripts/run_agent.py --agent gpt --model gpt-6-luna --prompt-version v2 --vuln-id <OTHER_OK_ID> --runs runs/demo_live
+    python scripts/evaluate.py --agent gpt --vuln-id <OTHER_OK_ID> --runs runs/demo_live
+    python scripts/aggregate_results.py --runs runs/demo_live --agents gpt --ids <OTHER_OK_ID> --out-dir /tmp/demo_live
 
 The key is only exported in the terminal; it is never stored in files or commits.
 
@@ -110,6 +118,7 @@ The key is only exported in the terminal; it is never stored in files or commits
 - `scripts/run_agent.py`: fixed prompt (`--prompt-version v1`, the assignment's, or `v2`, see Section 7b); sends only vulnerable source code; saves claim, confidence, and patch (`llm_response.json`), along with the original response, model, tokens, latency, timestamp, and errors; freezes files (SHA-256 hash and read-only); refuses to regenerate a frozen case; refuses to mix prompt versions in one `--runs` folder; flags responses truncated by the token limit; single call without retries.
 - `scripts/evaluate.py`: adds A, F, S, V, and FA to `eval.json`. F and S are decided from the pytest junit report, with the same parser Vul4Py's scan uses: a check passes only with 0 failures, 0 errors and at least 1 passed test. Skipped-only runs, zero collected tests (pytest rc 5), missing junit reports, timeouts and rc 999 ("no tests") are marked **incomplete**, never success. Stale junit files are deleted before each run; `rc=` values are read only from standard output; frozen hashes are verified before evaluation.
 - `scripts/vul4py.py` (one line): patches are applied with `git apply --recount`, which recomputes the line counts of the `@@` hunk headers (LLM-written diffs often get them wrong) without changing what the patch adds or removes. The evaluator's pre-check uses the same option. Re-evaluating the v1 attempts with this change gives identical results (the `*** Begin Patch` format is still rejected).
+- Aggregation: `scripts/label.py` and `scripts/stats.py` were inspected; they summarize the original `plausible` label per agent (`results/correct_<agent>.jsonl`) and never read the model's claim, so they cannot compute false assurance. `scripts/aggregate_results.py` was adapted instead.
 - `scripts/aggregate_results.py`: calculates VRR and FAR using the definitions in Section 3, reports incomplete cases and the denominator used, records the prompt version and the model ID returned by the API, and outputs `results.csv`, `results_table.md`, and `metrics.json`.
 - `scripts/make_reference_patch.py`: post-hoc diagnostic; builds the official fix of a case as a patch with the same files the model receives, to check the instrument (Section 7b).
 - `tests/`: 44 automated tests (no API calls, no Vul4Py needed) for the verdict rules, patch application with real `git`, response parsing and freezing, and VRR/FAR against the assignment example. Run with `python -m pytest tests/ -v`.
@@ -123,6 +132,8 @@ One HTTPS `POST` request per case (official `openai` client, `max_retries=0`, 30
 1. Copies `vulnerable/` to a candidate folder and applies `patch.diff` (A).
 2. If applied, executes functional tests (F) and the exploit/security test (S). Each check is decided from the pytest junit report: it passes only with 0 failures, 0 errors and at least 1 passed test.
 3. V = A·F·S. FA = C·(1 − V).
+
+Field names in the records: `claim` (C, the `claimed_success` of the assignment checklist), `confidence` (P), `patch.diff` (δ), `patch_applied` (A), `functional_pass` (F), `security_pass` (S), `verified_repair` (V), `false_assurance` (FA) and `latency_ms` (L).
 If the patch fails to apply, no tests are run (F = S = 0). If verification cannot finish (timeout, broken environment, missing tests), the record is **incomplete** and does not count toward N.
 The LLM never receives these results, and its response is frozen prior to evaluation.
 
@@ -217,6 +228,7 @@ To check whether the failures come from the model's patches or from the instrume
 - `temperature` is not sent (the statement example does not send it).
 - The fixed prompt preserves the typo "interner" from the assignment to remain identical to the original.
 - The 5 cases were chosen from `scan_report.tsv` (`OK` status, functional rc 0, few skipped tests) and noted down prior to calling the model.
+- Semgrep Community Edition is listed in the assignment header as available infrastructure, but no midterm task requires it. It was not used: every verdict comes from Vul4Py's functional and exploit tests, as Section 3 defines.
 
 ## 10. Incidents and Status
 
