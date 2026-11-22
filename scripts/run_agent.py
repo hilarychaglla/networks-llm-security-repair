@@ -14,6 +14,13 @@ Disposicion que produce (una carpeta por (agent, vuln_id)):
         frozen.sha256       -- hashes; se verifican con:  sha256sum -c frozen.sha256
 Los archivos quedan en SOLO LECTURA. Un caso congelado NO se regenera.
 
+Prompts fijos (--prompt-version):
+    v1  prompt del enunciado, copiado tal cual (resultado oficial del midterm, runs/midterm)
+    v2  mismo pedido, pero fija el formato de salida: JSON con las claves diff / claim /
+        confidence y el parche en unified diff con rutas relativas a la raiz del proyecto.
+        Segunda condicion experimental aprobada por el profesor (runs/midterm_v2).
+Cada condicion va en su propia carpeta --runs; una carpeta nunca mezcla versiones de prompt.
+
 Agentes integrados (llamada directa al LLM): claude, gpt
 Agentes externos (este script no los ejecuta): openhands, trae, swe
 """
@@ -35,17 +42,32 @@ RUNS = HERE / "runs"
 
 BUILTIN = {"claude", "gpt"}
 EXTERNAL = {"openhands", "trae", "swe"}
-SCRIPT_VERSION = "midterm-v1"
+SCRIPT_VERSION = "midterm-v2"
 FENCE = chr(96) * 3          # tres acentos graves, sin escribirlos literalmente
 
 # ------------------------------- CONFIGURACION FIJA -------------------------------
-# Prompt fijo del enunciado, copiado tal cual (incluida la errata "interner").
+# v1: prompt fijo del enunciado, copiado tal cual (incluida la errata "interner").
 SYSTEM_PROMPT = (
     "You are a security expert and a python programmer. I will provide you with a "
     "vulnerable Python project, and you will respond with a json file that includes the diff file, "
     "your claim if the code was patched (1) or not (0), and the confidence level of your claim (0-1). "
     "You don't have access to the interner nor external tools."
 )
+
+# v2: mismo pedido, con el formato de salida especificado. El v1 no decia que el diff debia ser
+# un unified diff, y el modelo respondio en formato "*** Begin Patch", que git apply no acepta.
+SYSTEM_PROMPT_V2 = (
+    "You are a security expert and a python programmer. I will provide you with a vulnerable "
+    "Python project; each file starts with a line '=== FILE: <path> ===' where <path> is relative "
+    "to the project root. Respond ONLY with a JSON object, with no other text, with exactly these keys: "
+    "\"diff\": a patch in unified diff format, as produced by `git diff`, with headers "
+    "'--- a/<path>' and '+++ b/<path>' using the same paths, and hunk headers '@@ -l,s +l,s @@'; "
+    "\"claim\": 1 if your patch fixes the vulnerability, 0 otherwise; "
+    "\"confidence\": the confidence level of your claim, a number between 0 and 1. "
+    "You don't have access to the internet nor external tools."
+)
+
+PROMPTS = {"v1": SYSTEM_PROMPT, "v2": SYSTEM_PROMPT_V2}
 
 EXCLUDE_DIRS = {"backported_support", ".git", ".venv", "venv", "env", ".tox", "site-packages", "node_modules",
                 "build", "dist", "docs", ".eggs", "__pycache__", ".pytest_cache", ".github"}
@@ -290,7 +312,7 @@ def write_frozen(out_dir: Path, record: dict, generation: dict, patch_text) -> N
 # ---------- ejecucion ----------
 
 def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: Path,
-                temperature=None, dry_run: bool = False) -> int:
+                temperature=None, dry_run: bool = False, prompt_version: str = "v1") -> int:
     """Devuelve 0 = ok, 1 = error, 2 = no se puede ejecutar, 3 = ya estaba congelado."""
     vuln_dir = case_dir / "vulnerable"
     if not vuln_dir.is_dir():
@@ -301,8 +323,9 @@ def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: P
     if not files:
         print(f"[!] {vuln_id}: no se encontro codigo para enviar", file=sys.stderr)
         return 2
+    system = PROMPTS[prompt_version]
     user = build_user_prompt(files)
-    print(f"[{vuln_id}] archivos a enviar: {len(files)} | caracteres: {len(user)}")
+    print(f"[{vuln_id}] prompt {prompt_version} | archivos a enviar: {len(files)} | caracteres: {len(user)}")
     for rel, _ in files:
         print("    -", rel)
     if omitted:
@@ -311,7 +334,7 @@ def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: P
     if dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "prompt_preview.txt").write_text(
-            "SYSTEM:\n" + SYSTEM_PROMPT + "\n\nUSER:\n" + user, encoding="utf-8")
+            "SYSTEM:\n" + system + "\n\nUSER:\n" + user, encoding="utf-8")
         print(f"[dry-run] NO se llamo a la API. Vista previa: {out_dir / 'prompt_preview.txt'}")
         return 0
 
@@ -326,11 +349,12 @@ def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: P
     timestamp = utc_now()
     try:
         if agent == "claude":
-            text, info = call_claude(SYSTEM_PROMPT, user, model)
+            text, info = call_claude(system, user, model)
         else:
-            text, info = call_gpt(SYSTEM_PROMPT, user, model, temperature=temperature)
+            text, info = call_gpt(system, user, model, temperature=temperature)
     except NoResponse as e:
         err = {"case_id": vuln_id, "agent": agent, "model_requested": model,
+               "prompt_version": prompt_version,
                "timestamp_utc": timestamp, "error_type": e.error_type, "error_message": e.message}
         if ALLOW_RERUN_AFTER_NO_RESPONSE:
             with open(out_dir / "api_errors.jsonl", "a", encoding="utf-8") as f:
@@ -358,7 +382,8 @@ def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: P
         "latency_ms": info["latency_ms"],
         "input_tokens": info["input_tokens"], "output_tokens": info["output_tokens"],
         "stop_reason": info["stop_reason"],
-        "system_prompt": SYSTEM_PROMPT, "system_prompt_sha256": sha256_text(SYSTEM_PROMPT),
+        "prompt_version": prompt_version,
+        "system_prompt": system, "system_prompt_sha256": sha256_text(system),
         "user_prompt_sha256": sha256_text(user),
         "context_files": [{"path": r, "chars": len(d)} for r, d in files],
         "context_omitted": omitted,
@@ -372,9 +397,13 @@ def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: P
     patch_text = None
     try:
         raw_patch, patch_text, claim, conf, warns = parse_response(text)
+        if info["stop_reason"] == "length":
+            warns.append("respuesta cortada por limite de tokens (stop_reason=length)")
         record.update(claim=claim, confidence=conf, patch=patch_text,
                       patch_as_returned=raw_patch, parse_warnings=warns)
     except (ValueError, TypeError, KeyError) as e:
+        if info["stop_reason"] == "length":
+            e = ValueError(f"{e} (respuesta cortada por limite de tokens)")
         record.update(parse_error=str(e)[:300], error_type="invalid_response_format",
                       error_message=str(e)[:300])
         patch_text = None
@@ -384,6 +413,7 @@ def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: P
         "input_tokens": info["input_tokens"], "output_tokens": info["output_tokens"],
         "stop_reason": info["stop_reason"], "elapsed_s": info["latency_ms"] / 1000.0,
         "latency_ms": info["latency_ms"], "agent": agent, "vuln_id": vuln_id,
+        "prompt_version": prompt_version,
         "context_files": [r for r, _ in files],
         "claim": record["claim"], "confidence": record["confidence"],
         "error_type": record["error_type"],
@@ -411,6 +441,18 @@ def verify_external(agent: str, vuln_id: str, out_dir: Path) -> int:
     return 0
 
 
+def existing_prompt_versions(agent_runs: Path) -> set:
+    """Versiones de prompt ya congeladas en una carpeta (los registros sin campo son v1)."""
+    found = set()
+    if agent_runs.is_dir():
+        for f in agent_runs.glob("*/llm_response.json"):
+            try:
+                found.add(json.loads(f.read_text(encoding="utf-8")).get("prompt_version") or "v1")
+            except (OSError, ValueError):
+                continue
+    return found
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Genera parches con un LLM y congela claim, confianza y parche.")
@@ -425,6 +467,8 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None, help="Tope de casos a procesar")
     ap.add_argument("--temperature", type=float, default=None,
                     help="Temperatura (por defecto NO se envia; usa 0 para reproducir el original)")
+    ap.add_argument("--prompt-version", choices=sorted(PROMPTS), default="v1",
+                    help="Prompt fijo: v1 = enunciado (oficial), v2 = formato unified diff especificado")
     ap.add_argument("--dry-run", action="store_true",
                     help="Construye el mensaje y lo guarda, SIN llamar a la API")
     ap.add_argument("--yes-all", action="store_true",
@@ -465,6 +509,12 @@ def main() -> int:
             print("[aviso] OPENROUTER_API_KEY esta definida: las llamadas iran por OpenRouter, "
                   "no por api.openai.com.", file=sys.stderr)
 
+    if args.agent in BUILTIN and not args.dry_run:
+        mixed = existing_prompt_versions(args.runs / args.agent) - {args.prompt_version}
+        if mixed:
+            sys.exit(f"{args.runs / args.agent} ya contiene intentos con el prompt {sorted(mixed)}; "
+                     f"usa otra carpeta --runs para el prompt {args.prompt_version}.")
+
     n_ok = n_err = n_skip = 0
     for vid in targets:
         case_dir = args.workspaces / vid
@@ -476,7 +526,8 @@ def main() -> int:
 
         if args.agent in BUILTIN:
             rc = run_builtin(args.agent, model, vid, case_dir, out_dir,
-                             temperature=args.temperature, dry_run=args.dry_run)
+                             temperature=args.temperature, dry_run=args.dry_run,
+                             prompt_version=args.prompt_version)
         else:
             rc = verify_external(args.agent, vid, out_dir)
 
