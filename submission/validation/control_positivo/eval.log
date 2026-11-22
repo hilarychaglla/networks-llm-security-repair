@@ -1,0 +1,16 @@
+$ /home/ec2-user/vul4py/.venv/bin/python /home/ec2-user/vul4py/scripts/vul4py.py --workspace-root /home/ec2-user/vul4py/workspaces --cve-id CVE-2023-30608 fork --src vulnerable --dst gpt_candidate --patch /home/ec2-user/vul4py/runs/sanity/gpt/CVE-2023-30608/patch.diff
+[exit 0]
+[+] Fork CVE-2023-30608: copy vulnerable -> gpt_candidate
+[+] Applying patch /home/ec2-user/vul4py/runs/sanity/gpt/CVE-2023-30608/patch.diff to gpt_candidate
+[+] Fork (copy) done.
+
+$ /home/ec2-user/vul4py/.venv/bin/python /home/ec2-user/vul4py/scripts/vul4py.py --workspace-root /home/ec2-user/vul4py/workspaces --cve-id CVE-2023-30608 functional --target gpt_candidate
+[exit 0]
+[+] Functional CVE-2023-30608::gpt_candidate
+  rc=0
+
+$ /home/ec2-user/vul4py/.venv/bin/python /home/ec2-user/vul4py/scripts/vul4py.py --workspace-root /home/ec2-user/vul4py/workspaces --cve-id CVE-2023-30608 exploit --targets gpt_candidate
+[exit 0]
+[+] Exploit tests for CVE-2023-30608
+  gpt_candidate: rc=0
+
