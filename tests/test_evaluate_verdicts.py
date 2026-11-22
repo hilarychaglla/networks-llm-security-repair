@@ -1,7 +1,7 @@
-"""Pruebas de las reglas de veredicto de scripts/evaluate.py (A, F, S, V, FA).
+"""Tests of the verdict rules of scripts/evaluate.py (A, F, S, V, FA).
 
-No llaman a la API ni ejecutan Vul4Py: se simulan las salidas de vul4py.py y los
-informes junit XML que escribe pytest. Ejecutar desde la raiz del repositorio:
+They neither call the API nor run Vul4Py: the outputs of vul4py.py and the junit XML reports
+written by pytest are simulated. Run from the repository root:
 
     python -m pytest tests/ -v
 """
@@ -25,18 +25,18 @@ def junit(tests=0, failed=0, errored=0, skipped=0):
 # ---------------------------------------------------------------- interpret()
 
 @pytest.mark.parametrize("rc, j, expected", [
-    (0, junit(tests=10), (True, "ok")),                          # todo aprobado
-    (1, junit(tests=10, failed=2), (False, "ok")),               # pruebas fallidas
-    (2, junit(tests=1, errored=1), (False, "ok")),               # error de recoleccion (p. ej. sintaxis rota por el parche)
-    (0, junit(tests=5, skipped=5), (None, "no_tests_executed")), # todo saltado: no demuestra nada
-    (5, junit(tests=0), (None, "no_tests_executed")),            # pytest rc 5: 0 pruebas recolectadas
-    (4, None, (None, "infra_error_no_junit")),                   # pytest no llego a correr
+    (0, junit(tests=10), (True, "ok")),                          # all passed
+    (1, junit(tests=10, failed=2), (False, "ok")),               # failed tests
+    (2, junit(tests=1, errored=1), (False, "ok")),               # collection error (e.g. syntax broken by the patch)
+    (0, junit(tests=5, skipped=5), (None, "no_tests_executed")), # all skipped: proves nothing
+    (5, junit(tests=0), (None, "no_tests_executed")),            # pytest rc 5: 0 tests collected
+    (4, None, (None, "infra_error_no_junit")),                   # pytest never ran
     (3, None, (None, "infra_error_no_junit")),
-    (999, None, (None, "no_tests")),                             # vul4py: no hay archivos de prueba
+    (999, None, (None, "no_tests")),                             # vul4py: no test files
     (124, None, (None, "timeout")),
     (-2, None, (None, "timeout")),
-    (-1, None, (None, "infra_error")),                           # excepcion en el runner
-    (139, None, (False, "ok")),                                  # SIGSEGV: crash provocado por el exploit
+    (-1, None, (None, "infra_error")),                           # exception in the runner
+    (139, None, (False, "ok")),                                  # SIGSEGV: crash caused by the exploit
     (None, None, (None, "rc_not_found")),
 ])
 def test_interpret(rc, j, expected):
@@ -44,11 +44,11 @@ def test_interpret(rc, j, expected):
 
 
 def test_rc_zero_without_junit_is_incomplete():
-    # rc 0 sin informe junit: no hay evidencia de que alguna prueba se ejecutara.
+    # rc 0 without a junit report: no evidence that any test ran.
     assert interpret(0, None) == (None, "infra_error_no_junit")
 
 
-# ------------------------------------------- lector de junit reutilizado de vul4py
+# --------------------------------------------- junit reader reused from vul4py
 
 JUNIT_XML = """<?xml version="1.0" encoding="utf-8"?>
 <testsuites><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="4">
@@ -70,13 +70,13 @@ def test_parse_junit_and_summary(tmp_path):
 
 
 def test_missing_or_corrupt_junit_is_none(tmp_path):
-    assert evaluate._parse_junit(tmp_path / "no_existe.junit.xml") is None
-    bad = tmp_path / "roto.junit.xml"
+    assert evaluate._parse_junit(tmp_path / "missing.junit.xml") is None
+    bad = tmp_path / "broken.junit.xml"
     bad.write_text("<testsuites><testsuite")
     assert evaluate._parse_junit(bad) is None
 
 
-# --------------------------------------- evaluate_one() de punta a punta (simulado)
+# ------------------------------------------ evaluate_one() end to end (simulated)
 
 CID = "CVE-0000-0001"
 
@@ -94,10 +94,10 @@ def make_case(tmp_path, claim=1):
 
 
 def fake_vul4py(case, fork_rc=0, func=(0, None), expl=(0, None), stale=False):
-    """Simula vul4py.py. func/expl = (rc impreso, contenido junit o None)."""
+    """Simulates vul4py.py. func/expl = (printed rc, junit content or None)."""
     logs = case / "logs"
     logs.mkdir(exist_ok=True)
-    if stale:   # junit "aprobado" que quedo de una evaluacion anterior
+    if stale:   # a "passed" junit report left over from a previous evaluation
         (logs / "functional_gpt_candidate.junit.xml").write_text(xml(tests=3))
         (logs / "exploit_gpt_candidate.junit.xml").write_text(xml(tests=1))
 
@@ -163,7 +163,7 @@ def test_pytest_rc5_is_incomplete(tmp_path, monkeypatch):
 
 
 def test_stale_junit_is_never_read(tmp_path, monkeypatch):
-    # vul4py "falla" sin escribir junit; el junit aprobado viejo NO debe contar.
+    # vul4py "fails" without writing junit; the old passed report must NOT count.
     v = evaluate_with(tmp_path, monkeypatch, stale=True, func=(4, None), expl=(4, None))
     assert v["verification_status"] == "incomplete"
     assert v["functional_junit"] is None

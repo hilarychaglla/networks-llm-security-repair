@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-make_reference_patch.py  (diagnostico posterior, NO forma parte del resultado oficial)
+make_reference_patch.py  (post-hoc diagnostic, NOT part of the official results)
 
-Construye el "parche de referencia" de un caso: la correccion oficial de los autores,
-como unified diff entre workspaces/<ID>/vulnerable y workspaces/<ID>/fixed, limitada a
-los mismos archivos que ve el modelo: codigo fuente .py, sin pruebas, sin backported_support
-y sin carpetas ocultas o de instalacion (.venv, build, ...).
+Builds the "reference patch" of a case: the authors' official fix, as a unified diff between
+workspaces/<ID>/vulnerable and workspaces/<ID>/fixed, limited to the same files the model
+sees: .py source code, without tests, without backported_support and without hidden or
+installation folders (.venv, build, ...).
 
-Sirve como control: si la correccion oficial obtiene V = 1 con el mismo evaluador, el
-instrumento funciona para ese caso y un V = 0 del modelo es atribuible a su parche. Si la
-correccion oficial tampoco obtiene V = 1, el caso no es verificable con este instrumento.
+It works as a control: if the official fix obtains V = 1 with the same evaluator, the
+instrument works for that case and a V = 0 of the model is attributable to its patch. If the
+official fix does not obtain V = 1 either, the case cannot be verified with this instrument.
 
-Uso:
+Usage:
     python scripts/make_reference_patch.py --ids CVE-2023-47163 CVE-2024-6866 --out /tmp/ref/gpt
     python scripts/evaluate.py --agent gpt --runs /tmp/ref
 """
@@ -37,10 +37,10 @@ def read_lines(p: Path):
 
 
 def reference_patch(case_dir: Path):
-    """-> (texto del unified diff, lista de archivos cambiados)."""
+    """-> (unified diff text, list of changed files)."""
     vul, fix = case_dir / "vulnerable", case_dir / "fixed"
     if not vul.is_dir() or not fix.is_dir():
-        raise FileNotFoundError(f"faltan {vul} o {fix}")
+        raise FileNotFoundError(f"{vul} or {fix} is missing")
     rels = sorted({p.relative_to(vul) for p in vul.rglob("*.py")} |
                   {p.relative_to(fix) for p in fix.rglob("*.py")})
     out, changed = [], []
@@ -61,16 +61,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ids", nargs="+", required=True)
     ap.add_argument("--workspaces", type=Path, default=Path("workspaces"))
-    ap.add_argument("--out", type=Path, required=True, help="carpeta <runs>/<agent> de salida")
+    ap.add_argument("--out", type=Path, required=True, help="output folder <runs>/<agent>")
     args = ap.parse_args()
     for cid in args.ids:
         text, changed = reference_patch(args.workspaces / cid)
         d = args.out / cid
         d.mkdir(parents=True, exist_ok=True)
         (d / "patch.diff").write_text(text, encoding="utf-8")
-        print(f"{cid}: {len(changed)} archivo(s): {changed}")
+        print(f"{cid}: {len(changed)} file(s): {changed}")
         if not changed:
-            print(f"  [!] {cid}: la correccion oficial no cambia codigo fuente .py", file=sys.stderr)
+            print(f"  [!] {cid}: the official fix does not change any .py source file", file=sys.stderr)
     return 0
 
 

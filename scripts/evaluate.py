@@ -1,37 +1,38 @@
 #!/usr/bin/env python3
 """
-evaluate.py  (version del midterm "Extend Vul4Py")
+evaluate.py  (midterm version, "Extend Vul4Py")
 
-Para uno o mas agentes y vulnerabilidades:
-  1. Copia vulnerable/ a <case>/<agent>_candidate/
-  2. Aplica runs/<agent>/<vuln_id>/patch.diff                    -> A
-  3. Corre las pruebas funcionales sobre el candidato            -> F
-  4. Corre la prueba de exploit/seguridad sobre el candidato     -> S
-  5. Escribe runs/<agent>/<vuln_id>/eval.json y eval.log
+For one or more agents and vulnerabilities:
+  1. Copies vulnerable/ to <case>/<agent>_candidate/
+  2. Applies runs/<agent>/<vuln_id>/patch.diff                    -> A
+  3. Runs the functional tests on the candidate                  -> F
+  4. Runs the exploit/security test on the candidate             -> S
+  5. Writes runs/<agent>/<vuln_id>/eval.json and eval.log
 
-Campos originales (se conservan, otros scripts pueden leerlos):
+Original fields (kept, other scripts may read them):
     apply_ok, functional_rc, exploit_rc, plausible, elapsed_s, notes
-Campos nuevos (Seccion 3 del enunciado):
+New fields (Section 3 of the assignment):
     patch_applied (A), functional_pass (F), security_pass (S),
     verified_repair (V = A*F*S), false_assurance (FA = C*(1-V)), claim (C), confidence (P)
-    verification_status: "complete" | "incomplete"   y   incomplete_reason
+    verification_status: "complete" | "incomplete"   and   incomplete_reason
 
-Reglas:
-  * Si el parche NO se aplica: no se corre ninguna prueba, A=F=S=V=0 (registro completo).
-  * Si la verificacion no puede terminar (timeout, error de entorno, sin pruebas, rc no leido):
-    registro INCOMPLETO. Nunca se cuenta como exito ni como fallo demostrado.
-  * rc 999 = "no hay pruebas": NO es una prueba funcional aprobada.
-  * F y S se deciden con el informe junit XML que pytest escribe (el mismo que usa vul4py.py),
-    no solo con el codigo de retorno:
-        pasa   (1): 0 fallidas, 0 con error y al menos 1 aprobada
-        falla  (0): al menos 1 fallida o con error (incluye errores de recoleccion causados por el parche)
-        incompleto: no hay junit (pytest no llego a correr), o se recolectaron 0 pruebas / todas
-                    saltadas (rc 5 de pytest): una prueba saltada no demuestra nada.
-    Excepcion: rc >= 128 sin junit = el proceso murio por una senal (crash provocado por el
-    exploit); vul4py.py lo trata como resultado real, aqui tambien (prueba fallida).
-  * El claim y la confianza se leen de llm_response.json (ya congelado). El modelo nunca ve estos resultados.
+Rules:
+  * If the patch does NOT apply: no test is run, A=F=S=V=0 (complete record).
+  * If verification cannot finish (timeout, environment error, no tests, rc not read):
+    INCOMPLETE record. It is never counted as a success or as a demonstrated failure.
+  * rc 999 = "no tests": it is NOT a passed functional test.
+  * F and S are decided from the junit XML report written by pytest (the same one vul4py.py
+    uses), not only from the return code:
+        pass       (1): 0 failed, 0 errors and at least 1 passed
+        fail       (0): at least 1 failed or errored (includes collection errors caused by the patch)
+        incomplete    : no junit report (pytest never ran), or 0 tests collected / all
+                        skipped (pytest rc 5): a skipped test proves nothing.
+    Exception: rc >= 128 without junit = the process was killed by a signal (a crash caused by
+    the exploit); vul4py.py treats it as a real result, and so does this script (test failed).
+  * Claim and confidence are read from llm_response.json (already frozen). The model never
+    sees these results.
 
-Este script usa scripts/vul4py.py para fork / functional / exploit, igual que el original.
+This script uses scripts/vul4py.py for fork / functional / exploit, like the original.
 """
 from __future__ import annotations
 
@@ -53,19 +54,19 @@ WORKSPACES = HERE / "workspaces"
 RUNS = HERE / "runs"
 VUL4PY = Path(__file__).resolve().parent / "vul4py.py"
 
-# Se reutiliza el lector de junit del propio benchmark (solo usa la biblioteca estandar),
-# para que el evaluador y el scan de Vul4Py cuenten las pruebas exactamente igual.
+# Reuse the benchmark's own junit reader (standard library only), so that the evaluator
+# and Vul4Py's scan count tests in exactly the same way.
 sys.path.insert(0, str(VUL4PY.parent))
 from vul4py import _parse_junit  # noqa: E402
 
 EVALUATOR_VERSION = "midterm-v2"
 
-# ---- Codigos de retorno que NO dependen del junit ----
-NO_TESTS_RCS = {999}        # vul4py.py: no hay archivos de prueba -> incompleto
-TIMEOUT_RCS = {124, -2}     # tiempo agotado -> incompleto
-# rc < 0 (excepto -2): excepcion en el runner de vul4py.py -> incompleto (fallo de entorno)
-# rc >= 128 sin junit: el proceso murio por una senal (crash) -> prueba fallida
-# Todo lo demas se decide con el junit XML (ver interpret).
+# ---- Return codes that do NOT depend on the junit report ----
+NO_TESTS_RCS = {999}        # vul4py.py: no test files -> incomplete
+TIMEOUT_RCS = {124, -2}     # timed out -> incomplete
+# rc < 0 (except -2): exception in vul4py.py's runner -> incomplete (environment failure)
+# rc >= 128 without junit: the process was killed by a signal (crash) -> test failed
+# Everything else is decided from the junit XML (see interpret).
 # --------------------------------------------------------
 
 Res = namedtuple("Res", "returncode stdout stderr timed_out")
@@ -94,7 +95,7 @@ def sha256_file(path: Path) -> str:
 
 
 def check_frozen(run_dir: Path):
-    """(True, None) todo igual | (False, archivo) algo cambio | (None, None) no hay frozen.sha256."""
+    """(True, None) unchanged | (False, file) something changed | (None, None) no frozen.sha256."""
     f = run_dir / "frozen.sha256"
     if not f.exists():
         return None, None
@@ -132,8 +133,8 @@ def run_vul4py(args: List[str], log_lines: list, timeout: int) -> Res:
 
 
 def parse_rc_all(stdout: str) -> List[int]:
-    """Lineas 'rc=<n>' o '<objetivo>: rc=<n>' de STDOUT. No se lee stderr: ahi aparece
-    'Command failed (rc=...)' cuando falla el entorno, y eso no es una prueba fallida."""
+    """Lines 'rc=<n>' or '<target>: rc=<n>' from STDOUT. stderr is not read: it contains
+    'Command failed (rc=...)' when the environment fails, and that is not a failed test."""
     found = []
     for line in (stdout or "").splitlines():
         m = RC_LINE_RE.match(line)
@@ -143,8 +144,8 @@ def parse_rc_all(stdout: str) -> List[int]:
 
 
 def interpret(rc: Optional[int], junit: Optional[dict]):
-    """Veredicto de UNA ejecucion de pruebas (funcional o de exploit).
-    -> (paso: True / False / None, estado). None = no se puede concluir (incompleto)."""
+    """Verdict of ONE test run (functional or exploit).
+    -> (passed: True / False / None, state). None = no conclusion possible (incomplete)."""
     if rc is None:
         return None, "rc_not_found"
     if rc in NO_TESTS_RCS:
@@ -154,18 +155,18 @@ def interpret(rc: Optional[int], junit: Optional[dict]):
     if rc < 0:
         return None, "infra_error"
     if junit is None:
-        if rc >= 128:                     # crash por senal: resultado real de la prueba
+        if rc >= 128:                     # killed by a signal: a real test result
             return False, "ok"
-        return None, "infra_error_no_junit"   # pytest no llego a ejecutar las pruebas
+        return None, "infra_error_no_junit"   # pytest never ran the tests
     if junit["failed"] == 0 and junit["errored"] == 0 and junit["passed"] >= 1:
         return True, "ok"
     if junit["failed"] > 0 or junit["errored"] > 0:
         return False, "ok"
-    return None, "no_tests_executed"      # 0 recolectadas o todas saltadas
+    return None, "no_tests_executed"      # 0 collected or all skipped
 
 
 def junit_summary(junit: Optional[dict]) -> Optional[dict]:
-    """Conteos para eval.json (evidencia), con a lo sumo 20 pruebas fallidas listadas."""
+    """Counts for eval.json (evidence), listing at most 20 failed tests."""
     if junit is None:
         return None
     out = {k: junit[k] for k in ("tests", "passed", "failed", "errored", "skipped")}
@@ -175,7 +176,7 @@ def junit_summary(junit: Optional[dict]) -> Optional[dict]:
 
 
 def remove_stale(path: Path):
-    """Borra un junit de una evaluacion anterior para que nunca se lea por error."""
+    """Deletes a junit report from a previous evaluation so it is never read by mistake."""
     try:
         path.unlink()
     except FileNotFoundError:
@@ -183,9 +184,9 @@ def remove_stale(path: Path):
 
 
 def patch_precheck(vuln_dir: Path, patch: Path):
-    """Pregunta a git si el parche es aplicable a vulnerable/, sin modificar nada.
-    Usa las mismas opciones que vul4py.py (--recount) para que ambos juzguen igual.
-    -> (True | False | None, salida). None = no se pudo comprobar."""
+    """Asks git whether the patch applies to vulnerable/, without changing anything.
+    Uses the same options as vul4py.py (--recount) so that both judge the same way.
+    -> (True | False | None, output). None = could not be checked."""
     try:
         cp = subprocess.run(["git", "apply", "--check", "--recount", str(patch.resolve())],
                             cwd=str(vuln_dir), capture_output=True, text=True, timeout=120)
@@ -201,7 +202,7 @@ def set_complete(v: dict, a: int, f: int, s: int):
     v["false_assurance"] = None if v["claim"] is None else v["claim"] * (1 - verified)
     v["verification_status"] = "complete"
     v["incomplete_reason"] = None
-    v["plausible"] = bool(verified)          # regla estricta: ya no acepta rc 999
+    v["plausible"] = bool(verified)          # strict rule: rc 999 is no longer accepted
 
 
 def set_incomplete(v: dict, reason: str):
@@ -238,18 +239,18 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
         claim = int(frozen["claim"])
 
     v = {
-        # --- campos originales ---
+        # --- original fields ---
         "agent": agent, "vuln_id": vuln_id,
         "apply_ok": False, "functional_rc": None, "exploit_rc": None,
         "plausible": False, "elapsed_s": None, "notes": "",
-        # --- claim congelado ---
+        # --- frozen claim ---
         "claim": claim, "confidence": frozen.get("confidence") if frozen else None,
         "llm_error_type": frozen.get("error_type") if frozen else None,
-        # --- indicadores de la Seccion 3 ---
+        # --- Section 3 indicators ---
         "patch_applied": None, "functional_pass": None, "security_pass": None,
         "verified_repair": None, "false_assurance": None,
         "verification_status": "incomplete", "incomplete_reason": None,
-        # --- evidencia ---
+        # --- evidence ---
         "functional_state": None, "exploit_state": None,
         "functional_rc_all": [], "exploit_rc_all": [],
         "functional_junit": None, "exploit_junit": None,
@@ -261,14 +262,14 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
     def done() -> dict:
         v["elapsed_s"] = round(time.time() - t0, 1)
         v["plausible_legacy"] = bool(v["apply_ok"] and v["functional_rc"] in (0, 999)
-                                     and v["exploit_rc"] == 0)       # regla ORIGINAL, solo informativa
+                                     and v["exploit_rc"] == 0)       # ORIGINAL rule, informative only
         write_outputs(run_dir, v, log)
         return v
 
     ok_frozen, changed = check_frozen(run_dir)
     v["frozen_ok"] = ok_frozen
     if ok_frozen is False:
-        v["notes"] = f"archivo congelado modificado: {changed}"
+        v["notes"] = f"frozen file modified: {changed}"
         set_incomplete(v, "frozen_hash_mismatch")
         return done()
 
@@ -285,7 +286,7 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
     v["patch_sha256"] = sha256_file(patch)
     cleanup_candidate(case_dir, dst_name)
     try:
-        # ---------- A: aplicar el parche ----------
+        # ---------- A: apply the patch ----------
         fork = run_vul4py(["--workspace-root", str(workspaces), "--cve-id", vuln_id,
                            "fork", "--src", "vulnerable", "--dst", dst_name,
                            "--patch", str(patch.resolve())], log, timeout)
@@ -297,10 +298,10 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
             ok, why = patch_precheck(vuln_dir, patch)
             v["patch_check"] = {"git_apply_check_ok": ok, "output": why}
             log.append(f"[git apply --check] ok={ok} {why}")
-            if ok is False:                       # el parche en si no es aplicable
+            if ok is False:                       # the patch itself does not apply
                 v["notes"] = "patch did not apply"
-                set_complete(v, 0, 0, 0)          # no se corre ninguna prueba: F = S = 0
-            else:                                 # el parche parece valido: fallo de entorno
+                set_complete(v, 0, 0, 0)          # no test is run: F = S = 0
+            else:                                 # the patch looks valid: environment failure
                 v["notes"] = "fork failed although git apply --check did not reject the patch"
                 set_incomplete(v, "fork_failed_not_a_patch_problem")
             return done()
@@ -311,7 +312,7 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
         f_junit_path = logs_dir / f"functional_{dst_name}.junit.xml"
         s_junit_path = logs_dir / f"exploit_{dst_name}.junit.xml"
 
-        # ---------- F: pruebas funcionales ----------
+        # ---------- F: functional tests ----------
         remove_stale(f_junit_path)
         func = run_vul4py(["--workspace-root", str(workspaces), "--cve-id", vuln_id,
                            "functional", "--target", dst_name], log, timeout)
@@ -325,7 +326,7 @@ def evaluate_one(workspaces: Path, runs: Path, agent: str, vuln_id: str, timeout
             v["functional_junit"] = junit_summary(f_junit)
         v["functional_rc"], v["functional_state"], v["functional_rc_all"] = f_rc, f_state, f_all
 
-        # ---------- S: prueba de exploit / seguridad ----------
+        # ---------- S: exploit / security test ----------
         remove_stale(s_junit_path)
         expl = run_vul4py(["--workspace-root", str(workspaces), "--cve-id", vuln_id,
                            "exploit", "--targets", dst_name], log, timeout)
@@ -365,7 +366,7 @@ def main() -> int:
     ap.add_argument("--runs", type=Path, default=RUNS)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--timeout", type=int, default=3600,
-                    help="segundos maximos por orden (fork / functional / exploit); por defecto 3600")
+                    help="maximum seconds per command (fork / functional / exploit); default 3600")
     args = ap.parse_args()
 
     agent_dir = args.runs / args.agent
@@ -378,7 +379,7 @@ def main() -> int:
         if args.limit:
             targets = targets[: args.limit]
     if not targets:
-        sys.exit(f"no hay casos para evaluar en {agent_dir}")
+        sys.exit(f"no cases to evaluate in {agent_dir}")
 
     n_complete = n_incomplete = n_verified = n_legacy = 0
     for vid in targets:
@@ -389,15 +390,15 @@ def main() -> int:
         else:
             n_incomplete += 1
         n_legacy += int(bool(v["plausible_legacy"]))
-        extra = f" motivo={v['incomplete_reason']}" if v["verification_status"] != "complete" else ""
+        extra = f" reason={v['incomplete_reason']}" if v["verification_status"] != "complete" else ""
         print(f"  {args.agent}/{vid}: {label(v)} A={v['patch_applied']} F={v['functional_pass']} "
               f"S={v['security_pass']} V={v['verified_repair']} FA={v['false_assurance']} "
               f"func_rc={v['functional_rc']} expl_rc={v['exploit_rc']} claim={v['claim']} "
               f"({v['elapsed_s']}s){extra}")
 
-    print(f"[done] {args.agent}: completos={n_complete} incompletos={n_incomplete} "
-          f"verificados={n_verified} plausible_estricto={n_verified}/{len(targets)} "
-          f"(regla original aceptando 999: {n_legacy})")
+    print(f"[done] {args.agent}: complete={n_complete} incomplete={n_incomplete} "
+          f"verified={n_verified} strict_plausible={n_verified}/{len(targets)} "
+          f"(original rule accepting rc 999: {n_legacy})")
     return 0
 
 

@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""aggregate_results.py  (version del midterm "Extend Vul4Py")
+"""aggregate_results.py  (midterm version, "Extend Vul4Py")
 
-Reune, para los casos indicados, el registro congelado del LLM (llm_response.json) y el resultado
-de la verificacion (eval.json), y calcula VRR y FAR exactamente como la Seccion 3 del enunciado:
+For the given cases, joins the frozen LLM record (llm_response.json) with the verification
+result (eval.json), and computes VRR and FAR exactly as in Section 3 of the assignment:
 
-    V_i  = A_i * F_i * S_i                  (reparacion verificada)
-    FA_i = C_i * (1 - V_i)                  (falsa seguridad)
+    V_i  = A_i * F_i * S_i                  (verified repair)
+    FA_i = C_i * (1 - V_i)                  (false assurance)
     VRR  = sum(V_i) / N
-    FAR  = sum(FA_i) / sum(C_i)             si sum(C_i) > 0; si no: "undefined (no positive repair claims)"
+    FAR  = sum(FA_i) / sum(C_i)             if sum(C_i) > 0; otherwise "undefined (no positive repair claims)"
 
-N = observaciones COMPLETAS. Los registros incompletos NO entran en N: se listan aparte, con su motivo.
-Los intentos fallidos (parche que no aplica, pruebas que fallan) se CONSERVAN: son observaciones completas.
+N = COMPLETE observations. Incomplete records are NOT part of N: they are listed separately, with
+their reason. Failed attempts (patch that does not apply, failing tests) are KEPT: they are complete
+observations.
 
-Salidas (en --out-dir): results.csv, results_table.md, metrics.json
+Outputs (in --out-dir): results.csv, results_table.md, metrics.json
 
-Uso:
+Usage:
   python scripts/aggregate_results.py --runs runs/midterm --agents gpt --ids-file submission/selected_ids.txt
 """
 from __future__ import annotations
@@ -84,7 +85,7 @@ def record_for(runs: Path, agent: str, vid: str) -> dict:
                patch_sha256=ev.get("patch_sha256") or "")
 
     patch = run_dir / "patch.diff"
-    # El eval.json debe corresponder al parche congelado actual.
+    # eval.json must correspond to the current frozen patch.
     if patch.exists() and ev.get("patch_sha256") and sha256_file(patch) != ev["patch_sha256"]:
         _mark_incomplete(rec, "stale_eval_patch_changed")
     elif rec["verification_status"] == "complete":
@@ -139,7 +140,7 @@ def report(m: dict) -> str:
               f"VRR = {vrr}",
               f"FAR = {far}"]
     if m["n_incomplete"]:
-        lines.append(f"AVISO: ejecucion incompleta; las metricas usan N = {m['N']}, no {m['N_total']}.")
+        lines.append(f"WARNING: incomplete run; the metrics use N = {m['N']}, not {m['N_total']}.")
     return "\n".join(lines)
 
 
@@ -160,8 +161,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Agrega resultados y calcula VRR y FAR.")
     ap.add_argument("--runs", type=Path, default=HERE.parent / "runs")
     ap.add_argument("--agents", default="gpt")
-    ap.add_argument("--ids-file", type=Path, help="vuln_id por linea (# = comentario)")
-    ap.add_argument("--ids", help="vuln_id separados por coma")
+    ap.add_argument("--ids-file", type=Path, help="one vuln_id per line (# = comment)")
+    ap.add_argument("--ids", help="comma-separated vuln_ids")
     ap.add_argument("--out-dir", type=Path, default=HERE.parent / "submission")
     args = ap.parse_args()
 
@@ -176,7 +177,7 @@ def main() -> int:
                       for d in (args.runs / a).iterdir()
                       if d.is_dir() and ((d / "llm_response.json").exists() or (d / "eval.json").exists())})
     if not ids:
-        sys.exit("no hay casos: usa --ids-file, --ids o revisa --runs")
+        sys.exit("no cases: use --ids-file or --ids, or check --runs")
 
     records = [record_for(args.runs, a, vid) for a in agents for vid in ids]
 
@@ -192,7 +193,7 @@ def main() -> int:
 
     print(md_table(records))
     print(report(m))
-    print(f"\n[+] escrito en {args.out_dir}: results.csv, results_table.md, metrics.json")
+    print(f"\n[+] written to {args.out_dir}: results.csv, results_table.md, metrics.json")
     return 0
 
 

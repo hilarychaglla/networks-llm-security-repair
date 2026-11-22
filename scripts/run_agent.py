@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
-run_agent.py  (version del midterm "Extend Vul4Py")
+run_agent.py  (midterm version, "Extend Vul4Py")
 
-Genera parches con un LLM y CONGELA el intento: claim, confianza y parche.
+Generates patches with an LLM and FREEZES the attempt: claim, confidence and patch.
 
-Disposicion que produce (una carpeta por (agent, vuln_id)):
+Layout it produces (one folder per (agent, vuln_id)):
     runs/<agent>/<vuln_id>/
-        prompt.txt          -- mensaje de usuario enviado (solo codigo vulnerable)
-        patch.diff          -- parche (unified diff contra vulnerable/)
-        generation.json     -- metadatos (modelo, tokens, tiempos, error); compatible con el original
-        llm_response.json   -- registro completo: respuesta original, claim, confianza, parche,
-                               modelo, tokens, latencia, hora y errores
-        frozen.sha256       -- hashes; se verifican con:  sha256sum -c frozen.sha256
-Los archivos quedan en SOLO LECTURA. Un caso congelado NO se regenera.
+        prompt.txt          -- user message sent (vulnerable source code only)
+        patch.diff          -- patch (unified diff against vulnerable/)
+        generation.json     -- metadata (model, tokens, timing, error); compatible with the original
+        llm_response.json   -- full record: original response, claim, confidence, patch,
+                               model, tokens, latency, timestamp and errors
+        frozen.sha256       -- hashes; check them with:  sha256sum -c frozen.sha256
+The files are left READ-ONLY. A frozen case is NEVER regenerated.
 
-Prompts fijos (--prompt-version):
-    v1  prompt del enunciado, copiado tal cual (resultado oficial del midterm, runs/midterm)
-    v2  mismo pedido, pero fija el formato de salida: JSON con las claves diff / claim /
-        confidence y el parche en unified diff con rutas relativas a la raiz del proyecto.
-        Segunda condicion experimental aprobada por el profesor (runs/midterm_v2).
-Cada condicion va en su propia carpeta --runs; una carpeta nunca mezcla versiones de prompt.
+Fixed prompts (--prompt-version):
+    v1  the assignment's prompt, copied verbatim (official midterm result, runs/midterm)
+    v2  the same request, but it fixes the output format: a JSON object with the keys
+        diff / claim / confidence and the patch as a unified diff with paths relative to the
+        project root. Second experimental condition approved by the instructor (runs/midterm_v2).
+Each condition goes in its own --runs folder; a folder never mixes prompt versions.
 
-Agentes integrados (llamada directa al LLM): claude, gpt
-Agentes externos (este script no los ejecuta): openhands, trae, swe
+Built-in agents (direct LLM call): claude, gpt
+External agents (not run by this script): openhands, trae, swe
 """
 from __future__ import annotations
 
@@ -43,10 +43,10 @@ RUNS = HERE / "runs"
 BUILTIN = {"claude", "gpt"}
 EXTERNAL = {"openhands", "trae", "swe"}
 SCRIPT_VERSION = "midterm-v2"
-FENCE = chr(96) * 3          # tres acentos graves, sin escribirlos literalmente
+FENCE = chr(96) * 3          # three backticks, without writing them literally
 
-# ------------------------------- CONFIGURACION FIJA -------------------------------
-# v1: prompt fijo del enunciado, copiado tal cual (incluida la errata "interner").
+# --------------------------------- FIXED SETTINGS ---------------------------------
+# v1: the assignment's fixed prompt, copied verbatim (including its typo "interner").
 SYSTEM_PROMPT = (
     "You are a security expert and a python programmer. I will provide you with a "
     "vulnerable Python project, and you will respond with a json file that includes the diff file, "
@@ -54,8 +54,8 @@ SYSTEM_PROMPT = (
     "You don't have access to the interner nor external tools."
 )
 
-# v2: mismo pedido, con el formato de salida especificado. El v1 no decia que el diff debia ser
-# un unified diff, y el modelo respondio en formato "*** Begin Patch", que git apply no acepta.
+# v2: the same request, with the output format specified. v1 did not say the diff had to be a
+# unified diff, and the model answered in "*** Begin Patch" format, which git apply rejects.
 SYSTEM_PROMPT_V2 = (
     "You are a security expert and a python programmer. I will provide you with a vulnerable "
     "Python project; each file starts with a line '=== FILE: <path> ===' where <path> is relative "
@@ -75,9 +75,9 @@ MAX_FILES = 60
 MAX_BYTES = 150_000
 API_TIMEOUT_S = 300
 
-# True : si NO llega ninguna respuesta del modelo (red, clave, limite de uso) se anota el error
-#        en api_errors.jsonl y se puede volver a ejecutar, porque no existe ningun parche entregado.
-# False: ese fallo tambien se congela como caso incompleto y no se puede repetir.
+# True : if NO response arrives from the model (network, key, rate limit), the error is logged in
+#        api_errors.jsonl and the case can be run again, because no patch was ever delivered.
+# False: that failure is also frozen as an incomplete case and cannot be repeated.
 ALLOW_RERUN_AFTER_NO_RESPONSE = True
 # ----------------------------------------------------------------------------------
 
@@ -90,7 +90,7 @@ def sha256_text(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-# ---------- seleccion del codigo vulnerable (sin informacion del arreglo) ----------
+# ---------- selection of the vulnerable code (no information about the fix) ----------
 
 def is_test_path(rel: Path) -> bool:
     parts = [p.lower() for p in rel.parts]
@@ -100,8 +100,8 @@ def is_test_path(rel: Path) -> bool:
 
 
 def collect_context_files(case_dir: Path):
-    """Solo codigo fuente del proyecto vulnerable: sin tests, entornos, dependencias,
-    meta.json ni fixed/. Devuelve ([(ruta, contenido)], [rutas_omitidas])."""
+    """Only source code of the vulnerable project: no tests, environments, dependencies,
+    meta.json or fixed/. Returns ([(path, content)], [omitted_paths])."""
     root = case_dir / "vulnerable"
     sent, omitted, total = [], [], 0
     for p in sorted(root.rglob("*.py")):
@@ -118,15 +118,15 @@ def collect_context_files(case_dir: Path):
 
 
 def build_user_prompt(files) -> str:
-    # Solo codigo: sin id del CVE, sin commit de correccion, sin descripcion, sin pruebas.
+    # Code only: no CVE ID, no fix commit, no description, no tests.
     return "\n\n".join(f"=== FILE: {rel} ===\n{data}" for rel, data in files)
 
 
-# ---------- interpretacion de la respuesta ----------
+# ---------- parsing the response ----------
 
 def extract_diff(text: str) -> str:
-    """Si el modelo envolvio el diff en bloques de codigo, los quita; garantiza salto de linea final.
-    No toca nada mas del contenido."""
+    """If the model wrapped the diff in a code block, removes the fences; ensures a final newline.
+    Nothing else in the content is changed."""
     t = text
     s = t.strip()
     if s.startswith(FENCE):
@@ -148,19 +148,19 @@ def _to_claim(v) -> int:
         return 1
     if isinstance(v, str) and v.strip().lower() in ("0", "false", "no"):
         return 0
-    raise ValueError(f"claim no interpretable: {v!r}")
+    raise ValueError(f"claim cannot be interpreted: {v!r}")
 
 
 def parse_response(text: str):
-    """Devuelve (parche_tal_como_vino, parche_listo, claim, confianza, avisos) o lanza ValueError.
-    El prompt fijo no define los nombres de las claves del JSON, por eso se aceptan varios."""
+    """Returns (patch_as_returned, patch_ready, claim, confidence, warnings) or raises ValueError.
+    The v1 prompt does not name the JSON keys, so several names are accepted."""
     warnings = []
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
-        raise ValueError("no se encontro un objeto JSON en la respuesta")
+        raise ValueError("no JSON object found in the response")
     data = json.loads(m.group(0), strict=False)
     if not isinstance(data, dict):
-        raise ValueError("el JSON no es un objeto")
+        raise ValueError("the JSON is not an object")
 
     def pick(*keys):
         for k in keys:
@@ -172,20 +172,20 @@ def parse_response(text: str):
     claim = pick("claim", "claimed_success", "patched")
     conf = pick("confidence", "confidence_level")
     if not isinstance(diff, str) or not diff.strip():
-        raise ValueError("falta el parche (diff) o no es texto")
+        raise ValueError("the patch (diff) is missing or is not text")
     if claim is None or conf is None:
-        raise ValueError("falta claim o confianza")
+        raise ValueError("claim or confidence is missing")
     claim = _to_claim(claim)
     conf = float(conf)
     if not 0.0 <= conf <= 1.0:
-        warnings.append(f"confianza fuera de [0,1]: {conf}")
+        warnings.append(f"confidence outside [0,1]: {conf}")
     patch = extract_diff(diff)
     if "@@" not in patch or "---" not in patch:
-        warnings.append("el parche no parece un unified diff (se congela igualmente)")
+        warnings.append("the patch does not look like a unified diff (frozen anyway)")
     return diff, patch, claim, conf, warnings
 
 
-# ---------- errores y llamadas al LLM ----------
+# ---------- errors and LLM calls ----------
 
 class NoResponse(Exception):
     def __init__(self, error_type: str, message: str):
@@ -220,7 +220,7 @@ def _dump(obj):
 
 
 def call_claude(system: str, prompt: str, model: str):
-    from anthropic import Anthropic  # importacion diferida
+    from anthropic import Anthropic  # deferred import
     client = Anthropic()
     t0 = time.perf_counter()
     try:
@@ -244,16 +244,16 @@ def call_claude(system: str, prompt: str, model: str):
 
 
 def call_gpt(system: str, prompt: str, model: str, temperature=None):
-    from openai import OpenAI  # importacion diferida
-    # Si OPENROUTER_API_KEY esta definida, el original enruta por OpenRouter. Se conserva,
-    # pero queda registrado (provider/base_url). Para el midterm usa la API de OpenAI:
-    # no definas OPENROUTER_API_KEY ni OPENAI_BASE_URL.
+    from openai import OpenAI  # deferred import
+    # If OPENROUTER_API_KEY is set, the original script routes through OpenRouter. This is kept,
+    # but recorded (provider/base_url). The midterm uses the OpenAI API: do not set
+    # OPENROUTER_API_KEY or OPENAI_BASE_URL.
     or_key = os.environ.get("OPENROUTER_API_KEY")
     base_url = os.environ.get("OPENAI_BASE_URL") or ("https://openrouter.ai/api/v1" if or_key else None)
     api_key = or_key or os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise NoResponse("missing_api_key", "no hay clave de API en el entorno")
-    kwargs = {"api_key": api_key, "timeout": API_TIMEOUT_S, "max_retries": 0}  # sin reintentos
+        raise NoResponse("missing_api_key", "no API key in the environment")
+    kwargs = {"api_key": api_key, "timeout": API_TIMEOUT_S, "max_retries": 0}  # no retries
     if base_url:
         kwargs["base_url"] = base_url
     client = OpenAI(**kwargs)
@@ -264,7 +264,7 @@ def call_gpt(system: str, prompt: str, model: str, temperature=None):
     if temperature is not None:
         params["temperature"] = temperature
 
-    t0 = time.perf_counter()                      # la latencia se mide SOLO alrededor de la peticion
+    t0 = time.perf_counter()                      # latency is measured ONLY around the request
     try:
         resp = client.chat.completions.create(**params)
     except Exception as e:
@@ -288,10 +288,10 @@ def call_gpt(system: str, prompt: str, model: str, temperature=None):
     return text, info
 
 
-# ---------- congelado ----------
+# ---------- freezing ----------
 
 def write_frozen(out_dir: Path, record: dict, generation: dict, patch_text) -> None:
-    """Guarda todo, escribe los hashes y deja los archivos en solo lectura."""
+    """Saves everything, writes the hashes and makes the files read-only."""
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "llm_response.json").write_text(
         json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -309,38 +309,38 @@ def write_frozen(out_dir: Path, record: dict, generation: dict, patch_text) -> N
         os.chmod(out_dir / n, 0o444)
 
 
-# ---------- ejecucion ----------
+# ---------- execution ----------
 
 def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: Path,
                 temperature=None, dry_run: bool = False, prompt_version: str = "v1") -> int:
-    """Devuelve 0 = ok, 1 = error, 2 = no se puede ejecutar, 3 = ya estaba congelado."""
+    """Returns 0 = ok, 1 = error, 2 = cannot run, 3 = already frozen."""
     vuln_dir = case_dir / "vulnerable"
     if not vuln_dir.is_dir():
-        print(f"[!] {vuln_id}: no existe {vuln_dir}", file=sys.stderr)
+        print(f"[!] {vuln_id}: {vuln_dir} does not exist", file=sys.stderr)
         return 2
 
     files, omitted = collect_context_files(case_dir)
     if not files:
-        print(f"[!] {vuln_id}: no se encontro codigo para enviar", file=sys.stderr)
+        print(f"[!] {vuln_id}: no source code found to send", file=sys.stderr)
         return 2
     system = PROMPTS[prompt_version]
     user = build_user_prompt(files)
-    print(f"[{vuln_id}] prompt {prompt_version} | archivos a enviar: {len(files)} | caracteres: {len(user)}")
+    print(f"[{vuln_id}] prompt {prompt_version} | files to send: {len(files)} | characters: {len(user)}")
     for rel, _ in files:
         print("    -", rel)
     if omitted:
-        print(f"[aviso] omitidos por tope de tamano: {omitted}")
+        print(f"[warning] omitted because of the size cap: {omitted}")
 
     if dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "prompt_preview.txt").write_text(
             "SYSTEM:\n" + system + "\n\nUSER:\n" + user, encoding="utf-8")
-        print(f"[dry-run] NO se llamo a la API. Vista previa: {out_dir / 'prompt_preview.txt'}")
+        print(f"[dry-run] the API was NOT called. Preview: {out_dir / 'prompt_preview.txt'}")
         return 0
 
-    # Un solo intento por caso: si ya hay un registro o un parche, no se regenera.
+    # One attempt per case: if a record or a patch already exists, it is not regenerated.
     if (out_dir / "llm_response.json").exists() or (out_dir / "patch.diff").exists():
-        print(f"[{vuln_id}] ya hay un intento congelado o un parche previo en {out_dir}. No se regenera.")
+        print(f"[{vuln_id}] a frozen attempt or a previous patch already exists in {out_dir}. Not regenerated.")
         return 3
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -359,17 +359,17 @@ def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: P
         if ALLOW_RERUN_AFTER_NO_RESPONSE:
             with open(out_dir / "api_errors.jsonl", "a", encoding="utf-8") as f:
                 f.write(json.dumps(err, ensure_ascii=False) + "\n")
-            (out_dir / "generation.json").write_text(      # compatible con el original
+            (out_dir / "generation.json").write_text(      # compatible with the original
                 json.dumps({"agent": agent, "model": model, "error": e.error_type}, indent=2),
                 encoding="utf-8")
-            print(f"[!] {vuln_id}: sin respuesta de la API ({e.error_type}). "
-                  "No hay parche congelado; puedes volver a ejecutar.", file=sys.stderr)
+            print(f"[!] {vuln_id}: no response from the API ({e.error_type}). "
+                  "No patch was frozen; you can run it again.", file=sys.stderr)
         else:
             record = dict(err, claim=None, confidence=None, patch=None, raw_response=None,
                           script_version=SCRIPT_VERSION)
             write_frozen(out_dir, record,
                          {"agent": agent, "model": model, "error": e.error_type}, None)
-            print(f"[!] {vuln_id}: error de API ({e.error_type}). Congelado como incompleto.",
+            print(f"[!] {vuln_id}: API error ({e.error_type}). Frozen as incomplete.",
                   file=sys.stderr)
         return 1
 
@@ -398,17 +398,17 @@ def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: P
     try:
         raw_patch, patch_text, claim, conf, warns = parse_response(text)
         if info["stop_reason"] == "length":
-            warns.append("respuesta cortada por limite de tokens (stop_reason=length)")
+            warns.append("response truncated by the token limit (stop_reason=length)")
         record.update(claim=claim, confidence=conf, patch=patch_text,
                       patch_as_returned=raw_patch, parse_warnings=warns)
     except (ValueError, TypeError, KeyError) as e:
         if info["stop_reason"] == "length":
-            e = ValueError(f"{e} (respuesta cortada por limite de tokens)")
+            e = ValueError(f"{e} (response truncated by the token limit)")
         record.update(parse_error=str(e)[:300], error_type="invalid_response_format",
                       error_message=str(e)[:300])
         patch_text = None
 
-    generation = {                                  # mismas claves que el original, mas las nuevas
+    generation = {                                  # same keys as the original, plus the new ones
         "model": model, "model_returned": info["model_returned"], "provider": info["provider"],
         "input_tokens": info["input_tokens"], "output_tokens": info["output_tokens"],
         "stop_reason": info["stop_reason"], "elapsed_s": info["latency_ms"] / 1000.0,
@@ -421,18 +421,18 @@ def run_builtin(agent: str, model: str, vuln_id: str, case_dir: Path, out_dir: P
     write_frozen(out_dir, record, generation, patch_text)
 
     if record["error_type"]:
-        print(f"[!] {vuln_id}: respuesta recibida pero no interpretable ({record['parse_error']}). "
-              "Congelada como incompleta; no se regenera.", file=sys.stderr)
+        print(f"[!] {vuln_id}: response received but could not be parsed ({record['parse_error']}). "
+              "Frozen as incomplete; it is not regenerated.", file=sys.stderr)
         return 1
-    print(f"[{vuln_id}] congelado: claim={record['claim']} confianza={record['confidence']} "
-          f"latencia={record['latency_ms']} ms tokens={record['input_tokens']}/{record['output_tokens']}")
+    print(f"[{vuln_id}] frozen: claim={record['claim']} confidence={record['confidence']} "
+          f"latency={record['latency_ms']} ms tokens={record['input_tokens']}/{record['output_tokens']}")
     return 0
 
 
 def verify_external(agent: str, vuln_id: str, out_dir: Path) -> int:
     patch = out_dir / "patch.diff"
     if not patch.exists():
-        print(f"[external] se esperaba {patch} producido por el agente {agent}; no se encontro.",
+        print(f"[external] expected {patch} produced by agent {agent}; not found.",
               file=sys.stderr)
         return 2
     (out_dir / "generation.json").write_text(
@@ -442,7 +442,7 @@ def verify_external(agent: str, vuln_id: str, out_dir: Path) -> int:
 
 
 def existing_prompt_versions(agent_runs: Path) -> set:
-    """Versiones de prompt ya congeladas en una carpeta (los registros sin campo son v1)."""
+    """Prompt versions already frozen in a folder (records without the field are v1)."""
     found = set()
     if agent_runs.is_dir():
         for f in agent_runs.glob("*/llm_response.json"):
@@ -455,24 +455,24 @@ def existing_prompt_versions(agent_runs: Path) -> set:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Genera parches con un LLM y congela claim, confianza y parche.")
+        description="Generates patches with an LLM and freezes claim, confidence and patch.")
     ap.add_argument("--agent", required=True, choices=sorted(BUILTIN | EXTERNAL))
-    ap.add_argument("--model", help="Modelo (solo agentes integrados). "
-                                    "Por defecto: claude=claude-opus-4-7, gpt=gpt-6-luna")
-    ap.add_argument("--vuln-id", help="Una vulnerabilidad concreta")
+    ap.add_argument("--model", help="Model (built-in agents only). "
+                                    "Default: claude=claude-opus-4-7, gpt=gpt-6-luna")
+    ap.add_argument("--vuln-id", help="A single vulnerability")
     ap.add_argument("--ids-file", type=Path,
-                    help="Archivo con un vuln_id por linea (las lineas con # se ignoran)")
+                    help="File with one vuln_id per line (lines starting with # are ignored)")
     ap.add_argument("--workspaces", type=Path, default=WORKSPACES)
     ap.add_argument("--runs", type=Path, default=RUNS)
-    ap.add_argument("--limit", type=int, default=None, help="Tope de casos a procesar")
+    ap.add_argument("--limit", type=int, default=None, help="Maximum number of cases to process")
     ap.add_argument("--temperature", type=float, default=None,
-                    help="Temperatura (por defecto NO se envia; usa 0 para reproducir el original)")
+                    help="Temperature (NOT sent by default; use 0 to reproduce the original script)")
     ap.add_argument("--prompt-version", choices=sorted(PROMPTS), default="v1",
-                    help="Prompt fijo: v1 = enunciado (oficial), v2 = formato unified diff especificado")
+                    help="Fixed prompt: v1 = assignment (official), v2 = unified diff format specified")
     ap.add_argument("--dry-run", action="store_true",
-                    help="Construye el mensaje y lo guarda, SIN llamar a la API")
+                    help="Builds and saves the message WITHOUT calling the API")
     ap.add_argument("--yes-all", action="store_true",
-                    help="Confirma que quieres recorrer TODOS los casos de workspaces/")
+                    help="Confirms that you want to process ALL cases in workspaces/")
     args = ap.parse_args()
 
     model = args.model
@@ -488,14 +488,14 @@ def main() -> int:
                    if ln.strip() and not ln.strip().startswith("#")]
     else:
         if args.agent in BUILTIN and not args.dry_run and not args.yes_all:
-            sys.exit("Sin --vuln-id ni --ids-file se recorreria TODOS los casos (cada uno es una "
-                     "llamada de pago a la API). Si es lo que quieres, agrega --yes-all.")
+            sys.exit("Without --vuln-id or --ids-file ALL cases would be processed (each one is a "
+                     "paid API call). If that is what you want, add --yes-all.")
         targets = sorted(p.name for p in args.workspaces.iterdir()
                          if p.is_dir() and (p / "meta.json").exists())
     if args.limit:
         targets = targets[: args.limit]
     if not targets:
-        sys.exit(f"no se encontraron casos en {args.workspaces}")
+        sys.exit(f"no cases found in {args.workspaces}")
 
     if args.agent in BUILTIN and not args.dry_run:
         key_var = "ANTHROPIC_API_KEY" if args.agent == "claude" else "OPENAI_API_KEY"
@@ -504,23 +504,23 @@ def main() -> int:
         else:
             has_key = bool(os.environ.get(key_var))
         if not has_key:
-            sys.exit(f"Falta {key_var} en el entorno. No se ha consumido ningun intento.")
+            sys.exit(f"{key_var} is missing from the environment. No attempt was used.")
         if args.agent == "gpt" and os.environ.get("OPENROUTER_API_KEY"):
-            print("[aviso] OPENROUTER_API_KEY esta definida: las llamadas iran por OpenRouter, "
-                  "no por api.openai.com.", file=sys.stderr)
+            print("[warning] OPENROUTER_API_KEY is set: calls will go through OpenRouter, "
+                  "not api.openai.com.", file=sys.stderr)
 
     if args.agent in BUILTIN and not args.dry_run:
         mixed = existing_prompt_versions(args.runs / args.agent) - {args.prompt_version}
         if mixed:
-            sys.exit(f"{args.runs / args.agent} ya contiene intentos con el prompt {sorted(mixed)}; "
-                     f"usa otra carpeta --runs para el prompt {args.prompt_version}.")
+            sys.exit(f"{args.runs / args.agent} already contains attempts with prompt {sorted(mixed)}; "
+                     f"use another --runs folder for prompt {args.prompt_version}.")
 
     n_ok = n_err = n_skip = 0
     for vid in targets:
         case_dir = args.workspaces / vid
         out_dir = args.runs / args.agent / vid
         if not case_dir.exists():
-            print(f"[!] {vid}: no existe {case_dir}; se omite", file=sys.stderr)
+            print(f"[!] {vid}: {case_dir} does not exist; skipped", file=sys.stderr)
             n_err += 1
             continue
 
@@ -539,7 +539,7 @@ def main() -> int:
         else:
             n_err += 1
 
-    print(f"[done] {args.agent}: ok={n_ok}, err={n_err}, ya_congelados={n_skip}, total={len(targets)}")
+    print(f"[done] {args.agent}: ok={n_ok}, err={n_err}, already_frozen={n_skip}, total={len(targets)}")
     return 0 if n_err == 0 else 1
 
 

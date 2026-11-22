@@ -1,4 +1,4 @@
-"""Pruebas de scripts/make_reference_patch.py (control de referencia diagnostico)."""
+"""Tests of scripts/make_reference_patch.py (diagnostic reference control)."""
 import sys
 from pathlib import Path
 

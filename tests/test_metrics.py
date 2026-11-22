@@ -1,4 +1,4 @@
-"""VRR y FAR de scripts/aggregate_results.py frente al ejemplo de la Seccion 3 del enunciado.
+"""VRR and FAR of scripts/aggregate_results.py against the example in Section 3 of the assignment.
 
     python -m pytest tests/ -v
 """
@@ -19,7 +19,7 @@ def rec(case, c, v, status="complete"):
             "incomplete_reason": "" if status == "complete" else "functional=timeout, exploit=timeout"}
 
 
-# Tabla del enunciado: (C, V) por caso -> VRR = 2/5 = 40 %, FAR = 2/4 = 50 %
+# Assignment table: (C, V) per case -> VRR = 2/5 = 40 %, FAR = 2/4 = 50 %
 EXAMPLE = [rec(1, 1, 1), rec(2, 1, 0), rec(3, 1, 0), rec(4, 0, 0), rec(5, 1, 1)]
 
 
@@ -41,7 +41,7 @@ def test_incomplete_records_are_excluded_from_N_and_listed():
 
 def test_far_undefined_without_positive_claims():
     m = compute_metrics([rec(1, 0, 0), rec(2, 0, 0)])
-    assert m["FAR"] is None                        # "undefined", nunca 0 %
+    assert m["FAR"] is None                        # "undefined", never 0 %
     assert m["VRR"] == 0
 
 
