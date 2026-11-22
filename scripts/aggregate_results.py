@@ -28,7 +28,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-COLS = ["case_id", "agent", "model", "timestamp_utc",
+COLS = ["case_id", "agent", "prompt_version", "model", "model_returned", "timestamp_utc",
         "claim", "confidence", "patch_applied", "functional_pass", "security_pass",
         "verified_repair", "false_assurance", "latency_ms", "input_tokens", "output_tokens",
         "verification_status", "incomplete_reason", "error_type",
@@ -53,7 +53,9 @@ def record_for(runs: Path, agent: str, vid: str) -> dict:
 
     rec = {c: "" for c in COLS}
     rec.update(case_id=vid, agent=agent,
-               model=gen.get("model_requested", ""), timestamp_utc=gen.get("timestamp_utc", ""),
+               prompt_version=(gen.get("prompt_version") or "v1") if gen else "",
+               model=gen.get("model_requested", ""), model_returned=gen.get("model_returned") or "",
+               timestamp_utc=gen.get("timestamp_utc", ""),
                latency_ms=gen.get("latency_ms", ""), input_tokens=gen.get("input_tokens", ""),
                output_tokens=gen.get("output_tokens", ""),
                error_type=gen.get("error_type") or "")
@@ -108,10 +110,12 @@ def compute_metrics(records: list) -> dict:
     done = [r for r in records if r["verification_status"] == "complete"]
     incomplete = [r for r in records if r["verification_status"] != "complete"]
     n = len(done)
+    versions = sorted({r["prompt_version"] for r in records if r["prompt_version"]})
     claims = sum(int(r["claim"]) for r in done)
     verified = sum(int(r["verified_repair"]) for r in done)
     false_assur = sum(int(r["false_assurance"]) for r in done)
     return {
+        "prompt_versions": versions,
         "N_total": len(records), "N": n, "n_incomplete": len(incomplete),
         "incomplete": [{"case_id": r["case_id"], "reason": r["incomplete_reason"]} for r in incomplete],
         "claims": claims, "verified": verified, "false_assurances": false_assur,
@@ -124,7 +128,8 @@ def report(m: dict) -> str:
     vrr = "undefined (no completed observations)" if m["VRR"] is None else f"{100 * m['VRR']:.1f}%"
     far = ("undefined (no positive repair claims)" if m["FAR"] is None
            else f"{100 * m['FAR']:.1f}%")
-    lines = [f"Completed observations used as N: {m['N']} of {m['N_total']}",
+    lines = [f"Prompt version(s): {', '.join(m['prompt_versions']) or '-'}",
+             f"Completed observations used as N: {m['N']} of {m['N_total']}",
              f"Incomplete observations: {m['n_incomplete']}"]
     for it in m["incomplete"]:
         lines.append(f"  - {it['case_id']}: {it['reason']}")
