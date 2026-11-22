@@ -1,29 +1,34 @@
 #!/usr/bin/env bash
-# Guion de demostracion (v2).  Ejecutar:  bash ~/vul4py/demo.sh
-cd ~/vul4py || exit 1
+# Guion de demostracion (v3).  Ejecutar desde cualquier lugar:  bash demo.sh
+cd "$(dirname "$0")" || exit 1
+ROOT="$(pwd)"
 source .venv/bin/activate
 unset OPENAI_API_KEY OPENROUTER_API_KEY OPENAI_BASE_URL
 step()  { echo; echo "=========================================================="; echo "$1"; echo "=========================================================="; }
 pause() { echo; read -r -p ">>> [Enter para seguir] " _; }
 
-step "1/10 REPOSITORIO: commits, cambios respecto a Vul4Py y donde estan las evidencias"
-git log --format='%h %an | %s' -9
+step "1/11 REPOSITORIO: commits, cambios respecto a Vul4Py y donde estan las evidencias"
+git log --format='%h %an | %s' -16
 git diff --stat 2649d7b HEAD -- scripts
-echo "--- evidencias:"; ls submission; ls runs/midterm/gpt
+echo "--- evidencias:"; ls submission; ls runs/midterm/gpt; ls runs/midterm_v2/gpt 2>/dev/null
 pause
 
-step "2/10 PROMPT FIJO (identico al enunciado)"
-cat submission/prompt.txt
+step "2/11 PRUEBAS AUTOMATICAS de las reglas (sin API y sin Vul4Py)"
+python -m pytest tests/ -q
 pause
 
-step "3/10 QUE SE ENVIA AL MODELO (sin llamar a la API)"
+step "3/11 PROMPTS FIJOS: v1 (enunciado, oficial) y v2 (formato especificado)"
+python -c "import sys; sys.path.insert(0,'scripts'); import run_agent as r; [print(f'--- {k}:\n{v}\n') for k,v in r.PROMPTS.items()]"
+pause
+
+step "4/11 QUE SE ENVIA AL MODELO (sin llamar a la API)"
 rm -rf runs/demo_dry
-python scripts/run_agent.py --agent gpt --model gpt-6-luna --vuln-id CVE-2023-47163 --runs runs/demo_dry --dry-run
+python scripts/run_agent.py --agent gpt --model gpt-6-luna --vuln-id CVE-2023-47163 --runs runs/demo_dry --prompt-version v2 --dry-run
 echo "menciones de backported en el prompt:"; grep -c -i "backported" runs/demo_dry/gpt/CVE-2023-47163/prompt_preview.txt
 rm -rf runs/demo_dry
 pause
 
-step "4/10 INTENTO CONGELADO: respuesta del modelo (CVE-2025-43859)"
+step "5/11 INTENTO CONGELADO: respuesta del modelo (CVE-2025-43859)"
 d=runs/midterm/gpt/CVE-2025-43859
 ls -l $d
 cat $d/frozen.sha256
@@ -32,25 +37,32 @@ python -c "import json;r=json.load(open('$d/llm_response.json'));print({k:r[k] f
 head -6 $d/patch.diff
 pause
 
-step "5/10 UN SOLO INTENTO: el script se niega a regenerar (no llama a la API)"
+step "6/11 UN SOLO INTENTO: el script se niega a regenerar (no llama a la API)"
 OPENAI_API_KEY=clave_falsa python scripts/run_agent.py --agent gpt --model gpt-6-luna --vuln-id CVE-2025-43859 --runs runs/midterm | tail -3
 pause
 
-step "6/10 POR QUE A=0: git apply rechaza el formato, y evaluate.py lo mide"
-(cd workspaces/CVE-2025-43859/vulnerable && git apply --check ~/vul4py/runs/midterm/gpt/CVE-2025-43859/patch.diff; echo "codigo de salida: $?")
+step "7/11 POR QUE A=0 EN v1: git apply rechaza el formato, y evaluate.py lo mide"
+(cd workspaces/CVE-2025-43859/vulnerable && git apply --check --recount "$ROOT/runs/midterm/gpt/CVE-2025-43859/patch.diff"; echo "codigo de salida: $?")
 rm -rf /tmp/demo_runs && cp -r runs/midterm /tmp/demo_runs
 python scripts/evaluate.py --agent gpt --runs /tmp/demo_runs
 pause
 
-step "7/10 CONTROL POSITIVO: un parche correcto SI se verifica (tarda unos 25 s)"
-python scripts/evaluate.py --agent gpt --vuln-id CVE-2023-30608 --runs runs/sanity
+step "8/11 CONTROL POSITIVO: un parche correcto SI se verifica (tarda unos 25 s)"
+rm -rf /tmp/sanity && mkdir -p /tmp/sanity/gpt/CVE-2023-30608
+cp submission/validation/control_positivo/patch.diff /tmp/sanity/gpt/CVE-2023-30608/
+python scripts/evaluate.py --agent gpt --vuln-id CVE-2023-30608 --runs /tmp/sanity
 pause
 
-step "8/10 METRICAS: VRR y FAR"
-python scripts/aggregate_results.py --runs runs/midterm --agents gpt --ids-file submission/selected_ids.txt --out-dir /tmp/demo_agg
+step "9/11 METRICAS: VRR y FAR de cada condicion"
+echo "=== v1 (oficial) ==="
+python scripts/aggregate_results.py --runs runs/midterm --agents gpt --ids-file submission/selected_ids.txt --out-dir /tmp/demo_agg_v1
+if [ -d runs/midterm_v2 ]; then
+  echo; echo "=== v2 ==="
+  python scripts/aggregate_results.py --runs runs/midterm_v2 --agents gpt --ids-file submission/selected_ids.txt --out-dir /tmp/demo_agg_v2
+fi
 pause
 
-step "9/10 RED: DNS, TCP, TLS y HTTPS hacia api.openai.com"
+step "10/11 RED: DNS, TCP, TLS y HTTPS hacia api.openai.com"
 echo "--- servidor DNS de la instancia:"; grep -v '^#' /etc/resolv.conf | head -4
 echo "--- IPv4 de api.openai.com:"; getent ahostsv4 api.openai.com | head -1
 curl -s -o /dev/null -w "dns=%{time_namelookup}s tcp_acum=%{time_connect}s tls_acum=%{time_appconnect}s total=%{time_total}s http=%{http_code}\n" https://api.openai.com/v1/models
@@ -58,7 +70,7 @@ curl -sv -o /dev/null https://api.openai.com/v1/models 2>&1 | grep -E "Connected
 echo "--- si DNS falla:"; curl -sS https://api.openai.invalid 2>&1 | head -2
 pause
 
-step "10/10 DIAGNOSTICO DE ERRORES DE API (sin costo; caso fuera de la muestra)"
+step "11/11 DIAGNOSTICO DE ERRORES DE API (sin costo; caso fuera de la muestra)"
 rm -rf runs/demo
 echo "--- clave invalida (HTTP 401):"
 OPENAI_API_KEY=clave_falsa python scripts/run_agent.py --agent gpt --model gpt-6-luna --vuln-id CVE-2023-6681 --runs runs/demo | tail -2
