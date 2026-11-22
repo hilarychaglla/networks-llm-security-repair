@@ -858,9 +858,11 @@ def apply_unidiff_patch(dst_dir: Path, patch_file: Path, logs_dir: Path):
 
     patch_abs = str(Path(patch_file).resolve())
 
-    # Try git apply first
+    # Try git apply first. --recount: ignore the line counts written in the "@@ -l,s +l,s @@"
+    # hunk headers and recompute them from the hunk body (LLM-written diffs often get the counts
+    # wrong). It does not change what the patch adds or removes. (midterm v2 change)
     cp = subprocess.run(
-        ["git", "apply", "--whitespace=nowarn", patch_abs],
+        ["git", "apply", "--recount", "--whitespace=nowarn", patch_abs],
         cwd=str(dst_dir),
         text=True,
         capture_output=True,

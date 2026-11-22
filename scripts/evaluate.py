@@ -184,9 +184,10 @@ def remove_stale(path: Path):
 
 def patch_precheck(vuln_dir: Path, patch: Path):
     """Pregunta a git si el parche es aplicable a vulnerable/, sin modificar nada.
+    Usa las mismas opciones que vul4py.py (--recount) para que ambos juzguen igual.
     -> (True | False | None, salida). None = no se pudo comprobar."""
     try:
-        cp = subprocess.run(["git", "apply", "--check", str(patch.resolve())],
+        cp = subprocess.run(["git", "apply", "--check", "--recount", str(patch.resolve())],
                             cwd=str(vuln_dir), capture_output=True, text=True, timeout=120)
         return cp.returncode == 0, ((cp.stderr or cp.stdout).strip()[:400])
     except Exception as e:
